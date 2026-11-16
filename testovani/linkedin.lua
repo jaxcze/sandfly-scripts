@@ -1,7 +1,7 @@
 local manifest = {
   id = 'linkedin',
   name = 'LinkedIn: příspěvky jako jedna položka',
-  version = '0.0.2',
+  version = '0.0.3',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -176,7 +176,8 @@ local function parse(post)
       if description == 'Zobrazit obrázek' then
         result.media[#result.media + 1] = 'obrázek'
       elseif body_index and not starts_with(description, 'Zobrazit společnost')
-        and not starts_with(description, 'Zobrazit profil') then
+        and not starts_with(description, 'Zobrazit profil')
+        and not starts_with(description, 'Zobrazit sponzorovaný') then
         result.media[#result.media + 1] = 'odkaz: ' .. description
       end
     end
@@ -234,11 +235,63 @@ local function describe(post)
   return table.concat(parts, '. ')
 end
 
+-- Karta doporučeného člověka ("Doporučeno pro vás"): má akce Zobrazit profil a Sledovat člena.
+local function followed_name(item)
+  local has_profile, name = false, nil
+  for _, action in ipairs(item.actions or {}) do
+    local label = action.label or ''
+    if label == 'Zobrazit profil' then
+      has_profile = true
+    end
+    name = name or label:match('^Sledovat člena (.+)$') or label:match('^Spojit se s (.+)$')
+  end
+  return has_profile and name or nil
+end
+
+-- "Radek Kitner. Sleduje 1 spojení". Podpis jen se zapnutým nastavením.
+local function describe_person(card, name)
+  local texts = {}
+  for _, item in ipairs(card:findAll({}, MAX_ITEMS)) do
+    local class = short_class(item)
+    local text
+    if class == 'TextView' then
+      text = trim(item.text)
+    elseif class ~= 'Button' and present(item.contentDescription) then
+      -- "Populární" je jen v popisku. Jméno ("Radek Kitner Ověřeno") a fotka se přeskakují.
+      local description = trim(item.contentDescription)
+      if not starts_with(description, name) and not description:find(name, 1, true) then
+        text = description
+      end
+    end
+    if present(text) and text ~= name then
+      texts[#texts + 1] = text
+    end
+  end
+  -- První text je podpis, zbytek důvod doporučení.
+  local parts = { name }
+  local headline = table.remove(texts, 1)
+  if settings.readHeadline and headline then
+    parts[#parts + 1] = (headline:gsub('%s*|%s*', ', '):gsub('%s+', ' '))
+  end
+  if #texts > 0 then
+    parts[#parts + 1] = table.concat(texts, ', ')
+  end
+  -- "Ph.D." by se se spojovací tečkou zdvojilo.
+  for i, part in ipairs(parts) do
+    parts[i] = (part:gsub('%.+$', ''))
+  end
+  return table.concat(parts, '. ')
+end
+
 -- Každé zaměření se počítá, aby se nepřečetl příspěvek, ze kterého už fokus odešel.
 local focus_count = 0
 
 local function say_post(item, fallback, count)
   local ok, text = pcall(function()
+    local name = followed_name(item)
+    if name then
+      return describe_person(item, name)
+    end
     return describe(parse(item))
   end)
   if not ok then
@@ -256,7 +309,7 @@ end
 sf.onFocus(function(item, text)
   focus_count = focus_count + 1
   -- Tady se smí dívat jen na to, co už položka má; volání aplikace je pomalé.
-  if not is_post(item) then
+  if not is_post(item) and not followed_name(item) then
     return
   end
   sf.setTimeout(say_post, 0, item, text, focus_count)
