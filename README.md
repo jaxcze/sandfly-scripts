@@ -36,6 +36,7 @@ github.com/jaxcze/sandfly-scripts/tree/main/testovani
 | Skript | Aplikace | Co dělá |
 |---|---|---|
 | `linkedin.lua` | LinkedIn | Každý příspěvek ve feedu je jedna položka: autor, čas, text, obrázek nebo odkazovaný článek a vaše reakce. Tlačítka uvnitř příspěvku se při švihání přeskakují, reakce, komentáře a přesdílení jsou v nabídce Akce. V nastavení jde zapnout podpis autora a počty reakcí a zvolit, jestli číst celý text, nebo jen začátek. |
+| `coffeelink.lua` | De'Longhi Coffee Link | Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent, přečtenou rozpoznáním textu. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry na detailu nápoje, bez tažení. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají název nápoje, nadpisy jsou označené. |
 
 ## Jak psát skripty
 
