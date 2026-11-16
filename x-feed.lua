@@ -1,7 +1,7 @@
 local manifest = {
   id = 'x-feed',
   name = 'X: příspěvky jako jedna položka',
-  version = '0.2',
+  version = '0.3',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -13,33 +13,54 @@ local manifest = {
     { key = 'readHandle', type = 'switch', title = 'Číst uživatelské jméno se zavináčem', default = false },
     { key = 'readTime', type = 'switch', title = 'Číst čas příspěvku', default = true },
     { key = 'readStats', type = 'switch', title = 'Číst počty odpovědí, repostů, lajků a zobrazení', default = false },
-  },
-  -- SandFly nedovoluje "has" uvnitř "inside", proto se příspěvek a jeho tlačítka rozlišují jinak:
-  -- tlačítka v příspěvku jde dlouze stisknout, samotný příspěvek ne.
-  rules = {
-    -- Příspěvek je klikací položka, ve které je tlačítko Odpovědět. Čte se jako jedna položka.
-    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Odpovědět' } }, group = true },
-    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Reply' } }, group = true },
-    -- Tlačítka pod příspěvkem se při švihání přeskakují. Jejich akce jsou v nabídce Akce příspěvku.
-    { match = { longClickable = true, has = { textContains = 'Odpověd' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'publikovat' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'lajk' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Zobrazení' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Záložk' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Sdílet' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Reply' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Repost' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Like' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'View' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Bookmark' } }, hide = 'all' },
-    { match = { longClickable = true, has = { textContains = 'Share' } }, hide = 'all' },
-    -- Obrázky v příspěvku. Jsou v nabídce Akce příspěvku, kterou doplňuje tento skript.
     {
-      match = { className = 'ImageView', clickable = true, inside = { { clickable = true }, { scrollable = true } } },
-      hide = true,
+      key = 'hideButtons',
+      type = 'switch',
+      title = 'Přeskakovat tlačítka a obrázky uvnitř příspěvků',
+      summary = 'Jsou pak v nabídce Akce příspěvku.',
+      default = true,
     },
   },
+  rules = {
+    -- Příspěvek je klikací položka, ve které je tlačítko Odpovědět. Čte se jako jedna položka.
+    -- Tlačítka v příspěvku jde dlouze stisknout, samotný příspěvek ne.
+    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Odpovědět' } }, group = true },
+    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Reply' } }, group = true },
+  },
 }
+
+-- Tlačítka a obrázky uvnitř příspěvku, které se při švihání přeskakují, pokud je to zapnuté.
+-- Platí jen pro položky v příspěvku (klikací položka, kterou nejde dlouze stisknout) ve feedu
+-- (posouvatelný seznam), aby se neskrylo menu ani spodní lišta. SandFly nedovoluje "has" uvnitř
+-- "inside", proto se příspěvek pozná takhle.
+local IN_POST = { { clickable = true, longClickable = false }, { scrollable = true } }
+local BUTTON_LABELS = {
+  'Odpověd', 'publikovat', 'lajk', 'Zobrazení', 'Záložk', 'Sdílet',
+  'Reply', 'Repost', 'Like', 'View', 'Bookmark', 'Share',
+}
+local HIDE_RULES = {
+  { match = { className = 'ImageView', clickable = true, inside = IN_POST }, hide = true },
+}
+for _, label in ipairs(BUTTON_LABELS) do
+  HIDE_RULES[#HIDE_RULES + 1] = {
+    match = { longClickable = true, has = { textContains = label }, inside = IN_POST },
+    hide = 'all',
+  }
+end
+
+local added_rules = {}
+local function apply_hide_rules(on)
+  for _, number in ipairs(added_rules) do
+    sf.rules.remove(number)
+  end
+  added_rules = {}
+  if on then
+    for _, rule in ipairs(HIDE_RULES) do
+      added_rules[#added_rules + 1] = sf.rules.add(rule)
+    end
+  end
+end
+apply_hide_rules(sf.settings.get('hideButtons') ~= false)
 
 -- Akce, podle kterých se pozná příspěvek. X je dává přímo příspěvku.
 local POST_ACTIONS = {
@@ -225,7 +246,9 @@ local settings = {
   readStats = sf.settings.get('readStats') == true,
 }
 sf.onSettingChange(function(key, value)
-  if settings[key] ~= nil then
+  if key == 'hideButtons' then
+    apply_hide_rules(value ~= false)
+  elseif settings[key] ~= nil then
     settings[key] = value == true
   end
 end)
