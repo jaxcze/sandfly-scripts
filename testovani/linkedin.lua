@@ -1,7 +1,7 @@
 local manifest = {
   id = 'linkedin',
   name = 'LinkedIn: příspěvky jako jedna položka',
-  version = '0.0.3',
+  version = '0.0.4',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -286,6 +286,10 @@ end
 -- Každé zaměření se počítá, aby se nepřečetl příspěvek, ze kterého už fokus odešel.
 local focus_count = 0
 
+-- LinkedIn po zaměření dotahuje obsah a SandFly pak tutéž položku ohlásí znovu. Stejná položka se
+-- stejným textem se proto podruhé nečte, dokud fokus neodejde jinam.
+local last_item, last_text
+
 local function say_post(item, fallback, count)
   local ok, text = pcall(function()
     local name = followed_name(item)
@@ -300,9 +304,11 @@ local function say_post(item, fallback, count)
   end
   if count == focus_count then
     text = present(text) or fallback
-    if present(text) then
-      sf.speak(text, { interrupt = true })
+    if not present(text) or (last_item ~= nil and item == last_item and text == last_text) then
+      return
     end
+    last_item, last_text = item, text
+    sf.speak(text, { interrupt = true })
   end
 end
 
@@ -310,6 +316,7 @@ sf.onFocus(function(item, text)
   focus_count = focus_count + 1
   -- Tady se smí dívat jen na to, co už položka má; volání aplikace je pomalé.
   if not is_post(item) and not followed_name(item) then
+    last_item, last_text = nil, nil
     return
   end
   sf.setTimeout(say_post, 0, item, text, focus_count)
