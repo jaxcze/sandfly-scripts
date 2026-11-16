@@ -1,12 +1,12 @@
 local manifest = {
   id = 'chatgpt',
   name = 'ChatGPT: zprávy jako jedna položka',
-  version = '0.0.4',
+  version = '0.1',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce, uvozená slovem Vy nebo ChatGPT. Odpovědi jsou nadpisy a ovládací prvek čtení Zprávy přechází po všech zprávách. Vaše fotky jsou samostatná položka s akcemi Popsat obrázek a Rozpoznat text na obrázku. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává. Testovací verze.',
+  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce, uvozená slovem Vy nebo ChatGPT. Odpovědi jsou nadpisy a ovládací prvek čtení Zprávy přechází po všech zprávách. Vaše fotky jsou samostatná položka s akcemi Popsat obrázek a Rozpoznat text na obrázku. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává.',
   apps = { 'com.openai.chatgpt' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
