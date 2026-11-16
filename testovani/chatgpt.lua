@@ -1,26 +1,29 @@
 local manifest = {
   id = 'chatgpt',
   name = 'ChatGPT: zprávy jako jedna položka',
-  version = '0.0.3',
+  version = '0.0.4',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce. Vaše fotky jsou samostatná položka s akcemi Popsat obrázek a Rozpoznat text na obrázku. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává. Testovací verze.',
+  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce, uvozená slovem Vy nebo ChatGPT. Odpovědi jsou nadpisy a ovládací prvek čtení Zprávy přechází po všech zprávách. Vaše fotky jsou samostatná položka s akcemi Popsat obrázek a Rozpoznat text na obrázku. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává. Testovací verze.',
   apps = { 'com.openai.chatgpt' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
     { key = 'readFull', type = 'switch', title = 'Číst celou odpověď', summary = 'Vypnuté: při zaměření se přečte jen první odstavec, celá odpověď je v nabídce Akce.', default = true },
-    { key = 'markYou', type = 'switch', title = 'Před vaše zprávy říkat „Vy“', default = true },
+    { key = 'markYou', type = 'switch', title = 'Ohlašovat autora zprávy', summary = 'Před vaší zprávou se řekne „Vy“, před odpovědí „ChatGPT“.', default = true },
   },
   commands = {
     { id = 'last', title = 'Zobrazit poslední zprávu', menu = true },
+    { id = 'message', title = 'Zprávy', control = true },
   },
   rules = {
-    -- Text odpovědi: odstavce, seznamy a tabulky jsou jedna položka.
+    -- Text odpovědi: odstavce, seznamy a tabulky jsou jedna položka a je to nadpis, aby šlo
+    -- přecházet mezi odpověďmi po nadpisech.
     {
       match = { focusable = true, clickable = false, has = { className = 'TextView' }, inside = { scrollable = true } },
       group = true,
+      heading = true,
     },
     -- Tlačítka pod odpovědí se při švihání přeskakují, jsou v nabídce Akce.
     { match = { clickable = true, has = { contentDescription = 'Kopírovat' }, inside = { scrollable = true } }, hide = 'all' },
@@ -188,9 +191,14 @@ local function blocks_of(node)
   return paragraphs(collect(node, {}, { lists = 0 }))
 end
 
--- Vaše zpráva je bublina, na kterou jde klepnout i dlouze. Text odpovědi na klepnutí nereaguje.
+-- Vaše zpráva je bublina, na kterou jde klepnout i dlouze, a je odsazená zleva. Text odpovědi
+-- na klepnutí nereaguje. Chaty v navigační nabídce vypadají jako bubliny, ale začínají u levého okraje.
 local function is_user(item)
-  return item.clickable and item.longClickable
+  return item.clickable and item.longClickable and item.bounds ~= nil and item.bounds.left > 40
+end
+
+local function is_answer(item)
+  return not item.clickable and short_class(item) == 'View'
 end
 
 local last_item, last_text
@@ -214,23 +222,27 @@ local function say(item, fallback)
     speak_once(item, fallback)
     return
   end
-  local text
+  local text, author
   if is_user(item) then
     text = table.concat(blocks, '\n')
-    if sf.settings.get('markYou') ~= false then
-      text = 'Vy: ' .. text
-    end
-  elseif sf.settings.get('readFull') == false and #blocks > 1 then
-    text = blocks[1] .. '\n…'
+    author = 'Vy'
   else
-    text = table.concat(blocks, '\n')
+    if sf.settings.get('readFull') == false and #blocks > 1 then
+      text = blocks[1] .. '\n…'
+    else
+      text = table.concat(blocks, '\n')
+    end
+    author = 'ChatGPT'
+  end
+  if sf.settings.get('markYou') ~= false then
+    text = author .. ': ' .. text
   end
   speak_once(item, text)
 end
 
 sf.onFocus(function(item, text)
   if short_class(item) == 'View' and item.focusable and (item.childCount or 0) > 0
-    and (is_user(item) or not item.clickable) then
+    and (is_user(item) or is_answer(item)) then
     sf.setTimeout(say, 0, item, text)
     return false
   end
@@ -295,7 +307,8 @@ local function recognize(item)
 end
 
 sf.onActions(function(item)
-  if short_class(item) ~= 'View' or not item.focusable or (item.childCount or 0) == 0 then
+  if short_class(item) ~= 'View' or not item.focusable or (item.childCount or 0) == 0
+    or not (is_user(item) or is_answer(item)) then
     return
   end
   local actions = {
@@ -318,6 +331,78 @@ sf.onActions(function(item)
     end
   end
   return actions
+end)
+
+-- Zpráva v řádku seznamu: text odpovědi, nebo vaše bublina.
+local function message_in(row)
+  local answer = row:find({ focusable = true, clickable = false })
+  if answer and is_answer(answer) then
+    return answer
+  end
+  local bubble = row:find({ clickable = true, longClickable = true })
+  if bubble and is_user(bubble) then
+    return bubble
+  end
+end
+
+local function signature(row)
+  local text = row:find({ className = 'TextView' }) or row:find({ contentDescription = 'Obrázek' })
+  return text and (present(text.text) or text.contentDescription) or nil
+end
+
+-- Ovládací prvek čtení Zprávy: přejde na další nebo předchozí zprávu, vaši i odpověď.
+-- Konverzace má na obrazovce jen pár zpráv, další se objeví až po posunutí.
+sf.onCommand('message', function(event)
+  local forward = event.direction ~= 'previous'
+  local focused = event.node or sf.screen.focused()
+  local current = focused and row_of(focused)
+  local list = current and current:parent() or sf.screen.find({ scrollable = true })
+  if list == nil then
+    sf.speak('Konverzace tu není', { interrupt = true })
+    return
+  end
+  -- Řádek se po posunutí pozná podle prvního textu, protože seznam řádky znovu vytváří.
+  local key = current and signature(current)
+  for attempt = 1, 4 do
+    local rows = list:children() or {}
+    local index
+    for i, row in ipairs(rows) do
+      if key ~= nil and signature(row) == key then
+        index = i
+      end
+    end
+    local first, last, step
+    if forward then
+      first, last, step = (index or 0) + 1, #rows, 1
+    else
+      first, last, step = (index or #rows + 1) - 1, 1, -1
+    end
+    for i = first, last, step do
+      local target = message_in(rows[i])
+      if target then
+        target:focus()
+        return
+      end
+    end
+    if attempt == 4 then
+      break
+    end
+    local moved
+    if forward then
+      moved = list:scrollForward()
+    else
+      moved = list:scrollBackward()
+    end
+    if not moved then
+      break
+    end
+    sf.sleep(300)
+    list = list:refresh()
+    if list == nil then
+      break
+    end
+  end
+  sf.speak(forward and 'Konec konverzace' or 'Začátek konverzace', { interrupt = true })
 end)
 
 -- Poslední zpráva v seznamu konverzace, která má text.
