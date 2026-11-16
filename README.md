@@ -35,6 +35,7 @@ github.com/jaxcze/sandfly-scripts/tree/main/testovani
 | Skript | Aplikace | Co dělá |
 |---|---|---|
 | `linkedin.lua` | LinkedIn | Každý příspěvek ve feedu je jedna položka: autor, čas, text, obrázek nebo odkazovaný článek a vaše reakce. Tlačítka uvnitř příspěvku se při švihání přeskakují, reakce, komentáře a přesdílení jsou v nabídce Akce. V nastavení jde zapnout podpis autora a počty reakcí a zvolit, jestli číst celý text, nebo jen začátek. |
+| `chatgpt.lua` | ChatGPT | Celá odpověď i tam, kde je na obrazovce vidět jen její část. V nabídce Akce na textu zprávy je Zobrazit celou zprávu (okno, ve kterém jde text číst po řádcích, slovech i znacích a označit) a Přečíst celou zprávu. Příkaz Zobrazit poslední zprávu je v SandFly menu. |
 
 ## Jak psát skripty
 
