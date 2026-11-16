@@ -1,12 +1,12 @@
 local manifest = {
   id = 'chatgpt',
   name = 'ChatGPT: zprávy jako jedna položka',
-  version = '0.0.2',
+  version = '0.0.3',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává. Testovací verze.',
+  description = 'V konverzaci ChatGPT je každá zpráva jedna položka a přečte se celá, i ta část, která není na obrazovce. Vaše fotky jsou samostatná položka s akcemi Popsat obrázek a Rozpoznat text na obrázku. Tlačítka pod odpovědí (Kopírovat, Přečíst nahlas, Sdílet, hodnocení, Zdroje, Další akce) se při švihání přeskakují a jsou v nabídce Akce, spolu se Zobrazit celou zprávu: okno, ve kterém jde text číst po řádcích, slovech i znacích. Ostatní ovládání aplikace zůstává. Testovací verze.',
   apps = { 'com.openai.chatgpt' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
@@ -45,6 +45,9 @@ local BUTTONS = {
   { title = 'Špatná odpověď', query = { contentDescription = 'Špatná odpověď' } },
   { title = 'Další akce', query = { contentDescription = 'Další akce' } },
 }
+
+-- Popisek obrázku, který ChatGPT dává fotkám ve zprávách.
+local IMAGE = { ['Obrázek'] = true, ['Image'] = true }
 
 local function present(text)
   if text ~= nil and text ~= '' then
@@ -88,7 +91,13 @@ end
 local function collect(node, out, state, list)
   for _, child in ipairs(node:children() or {}) do
     local class = short_class(child)
-    if (child.clickable and not child.longClickable) or class == 'Button' then
+    local description = child.contentDescription or ''
+    local source = description:match('^Zdroj obrázku: (.+)$')
+    if IMAGE[description] then
+      out[#out + 1] = { text = 'obrázek', list = list }
+    elseif source then
+      out[#out + 1] = { text = 'obrázek, zdroj ' .. trim(source), list = list }
+    elseif (child.clickable and not child.longClickable) or class == 'Button' then
       -- Tlačítko.
     elseif class == 'TextView' then
       local text = clean(present(child.text) or child.contentDescription)
@@ -265,6 +274,26 @@ local function press(item, query)
   target:click()
 end
 
+-- Popis obrázku stejnou službou, jakou má SandFly v příkazu Popsat obrázek.
+local function describe(item)
+  item:focus()
+  local ok, ran = pcall(sf.commands.run, 'DESCRIBE_IMAGE')
+  if not ok or not ran then
+    sf.speak('Popis obrázku se nepodařilo spustit', { interrupt = true })
+  end
+end
+
+local function recognize(item)
+  local image = item:find({ contentDescription = 'Obrázek' }) or item:find({ contentDescription = 'Image' }) or item
+  local ok, result = pcall(image.recognizeText, image)
+  local text = ok and result and trim(result.text) or ''
+  if text == '' then
+    sf.speak('Na obrázku není text, nebo není celý na obrazovce', { interrupt = true })
+    return
+  end
+  sf.ui.text('Text na obrázku', text)
+end
+
 sf.onActions(function(item)
   if short_class(item) ~= 'View' or not item.focusable or (item.childCount or 0) == 0 then
     return
@@ -273,7 +302,12 @@ sf.onActions(function(item)
     { title = 'Zobrazit celou zprávu', first = true, run = show },
     { title = 'Přečíst celou zprávu', run = read },
   }
-  if not item.clickable then
+  if is_user(item) and (item:find({ contentDescription = 'Obrázek' }) or item:find({ contentDescription = 'Image' })) then
+    actions = {
+      { title = 'Popsat obrázek', first = true, run = describe },
+      { title = 'Rozpoznat text na obrázku', first = true, run = recognize },
+    }
+  elseif not item.clickable then
     for _, button in ipairs(BUTTONS) do
       actions[#actions + 1] = {
         title = button.title,
