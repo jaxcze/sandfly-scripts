@@ -1,7 +1,7 @@
 local manifest = {
   id = 'linkedin',
   name = 'LinkedIn: příspěvky jako jedna položka',
-  version = '0.0.1',
+  version = '0.0.2',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -90,84 +90,103 @@ end
 
 local MAX_ITEMS = 120
 
+-- Místo času u sponzorovaných příspěvků.
+local AD = { ['Propagace'] = true, ['Propagováno'] = true, ['Promoted'] = true }
+
 -- Rozloží příspěvek na části. Položky jdou v pořadí, v jakém jsou na obrazovce.
 local function parse(post)
   local items = post:findAll({}, MAX_ITEMS)
-  local result = { header = {}, media = {} }
+  local result = { context = {}, headline = {}, media = {} }
 
-  -- Text příspěvku je první tlačítko s vlastním viditelným textem. Fotka autora a karta článku mají
-  -- jen popisek. Zkrácený text končí "… více", celý je v popisku.
-  local body_index
+  -- Jméno autora je text uvnitř bloku, jehož popisek tímto jménem začíná, např. blok
+  -- "Helena Jurka  3.kolo a další" s textem "Helena Jurka".
+  local name_index
+  local block
   for i, item in ipairs(items) do
-    if short_class(item) == 'Button' then
-      local text, description = item.text or '', item.contentDescription or ''
-      if present(trim(text)) then
+    local class = short_class(item)
+    if class ~= 'TextView' and class ~= 'Button' and present(item.contentDescription) then
+      block = trim(item.contentDescription)
+    elseif class == 'TextView' and present(item.text) and block and starts_with(block, trim(item.text)) then
+      name_index = i
+      result.name = trim(item.text)
+      break
+    end
+  end
+
+  -- Před jménem je kontext, např. "Uživateli Šárka Chytrová se to líbí".
+  for i = 1, (name_index or 1) - 1 do
+    local item = items[i]
+    if short_class(item) == 'TextView' and present(item.text) then
+      result.context[#result.context + 1] = trim(item.text)
+    end
+  end
+
+  -- Za jménem: stupeň kontaktu ("• 3.+"), podpis, čas nebo "Propagace". Pak text příspěvku: tlačítko
+  -- s vlastním textem, nebo první další text po čase.
+  local body_index
+  local header_done = false
+  for i = (name_index or 0) + 1, #items do
+    local item = items[i]
+    local class = short_class(item)
+    local text = trim(item.text)
+    if class == 'Button' and present(text) then
+      body_index = i
+      result.full = present(item.contentDescription) or text
+      result.short = text
+      break
+    elseif class == 'TextView' and present(text) and name_index then
+      if text:find('^•') then
+        -- Stupeň kontaktu.
+      elseif not header_done and is_time(text) then
+        result.time = clean_time(text)
+        header_done = true
+      elseif not header_done and AD[text] then
+        result.ad = true
+        header_done = true
+      elseif header_done then
         body_index = i
-        result.full = present(description) or text
-        result.short = trim((text:gsub('…%s*více$', ''):gsub('…%s*more$', '')))
+        result.full = text
+        result.short = text
         break
+      else
+        result.headline[#result.headline + 1] = text
       end
     end
   end
-
-  local header_end = body_index or #items + 1
-  for i = 1, header_end - 1 do
-    local item = items[i]
-    local class = short_class(item)
-    if class == 'TextView' and present(item.text) then
-      result.header[#result.header + 1] = trim(item.text)
+  if result.short then
+    result.short = trim((result.short:gsub('…%s*více$', ''):gsub('…%s*more$', '')))
+    -- Celý text je jen v popisku tlačítka. Obyčejný text bývá zkrácený i v celé podobě.
+    if result.full:find('…%s*více$') or result.full:find('…%s*more$') then
+      result.full = result.short
     end
   end
+  if not result.name then
+    result.name = name_from_actions(post)
+  end
 
+  -- Za textem (nebo v celém příspěvku, když text nemá): obrázek, odkazovaný článek, reakce, počty.
   for i = (body_index or 0) + 1, #items do
     local item = items[i]
-    local description = item.contentDescription or ''
+    local description = trim(item.contentDescription)
     if starts_with(description, 'Stav tlačítka reakce: ') then
       result.reaction = description:sub(#'Stav tlačítka reakce: ' + 1)
     elseif description:find('^%d[%d%s]*%s+reakc') or description:find('^%d[%d%s]*%s+koment') then
       result.stats = result.stats and (result.stats .. ', ' .. description) or description
-    elseif short_class(item) == 'Button' and present(description) and i > (body_index or 0) then
+    elseif short_class(item) == 'Button' and present(description) then
       if description == 'Zobrazit obrázek' then
         result.media[#result.media + 1] = 'obrázek'
-      elseif not starts_with(description, 'Zobrazit společnost') and not starts_with(description, 'Zobrazit profil') then
+      elseif body_index and not starts_with(description, 'Zobrazit společnost')
+        and not starts_with(description, 'Zobrazit profil') then
         result.media[#result.media + 1] = 'odkaz: ' .. description
       end
     end
   end
-
-  -- Obrázek bez textu příspěvku je před tlačítkem reakce, ne za textem.
-  if not body_index then
-    result.media = {}
-    for _, item in ipairs(items) do
-      if short_class(item) == 'Button' and item.contentDescription == 'Zobrazit obrázek' then
-        result.media[#result.media + 1] = 'obrázek'
-      end
-    end
-  end
-
-  -- Hlavička: jméno, podpis, čas. Čas je poslední text, který vypadá jako čas.
-  local header = result.header
-  local time_index
-  for i = #header, 1, -1 do
-    if is_time(header[i]) then
-      time_index = i
+  for _, action in ipairs(post.actions or {}) do
+    if action.label == 'Přehrát nebo pozastavit video' then
+      result.media[#result.media + 1] = 'video'
       break
     end
   end
-  if time_index then
-    result.time = clean_time(header[time_index])
-  end
-  result.name = header[1] or name_from_actions(post)
-  local headline = {}
-  for i = 2, (time_index or #header + 1) - 1 do
-    -- "• 2." je stupeň kontaktu.
-    if not header[i]:find('^•') then
-      headline[#headline + 1] = header[i]
-    end
-  end
-  result.headline = present(table.concat(headline, ', '))
-  -- Nad jménem bývá kontext, např. "Petr Novák se líbí tohle". Bez stromu s takovým příspěvkem
-  -- ho zatím nerozlišujeme.
   return result
 end
 
@@ -192,9 +211,14 @@ local function describe(post)
       parts[#parts + 1] = text
     end
   end
+  add(table.concat(post.context, ', '))
   add(post.name)
   if settings.readHeadline then
-    add(post.headline)
+    -- "Advokát  | Attorney @ Talers | GDPR": svislé čáry se nečtou.
+    add((table.concat(post.headline, ', '):gsub('%s*|%s*', ', '):gsub('%s+', ' ')))
+  end
+  if post.ad then
+    add('reklama')
   end
   if settings.readTime then
     add(post.time)
