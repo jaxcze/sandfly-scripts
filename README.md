@@ -24,6 +24,18 @@ Skripty nejsou podepsané od SandFly, instalace proto ukáže „Not signed by S
 |---|---|---|
 | `x-feed.lua` | X (Twitter) | Každý příspěvek ve feedu je jedna položka: přečte se jméno, text, obrázky a videa a čas. Tlačítka uvnitř příspěvku se při švihání přeskakují. Odpovědět, Znovu publikovat, Lajknout, Záložka, Sdílet a Zobrazit profil jsou v nabídce Akce, stejně jako obrázky příspěvku. V nastavení skriptu jde zapnout čtení @jména a počtů odpovědí, repostů a lajků. |
 
+## Testovací skripty
+
+Rozpracované skripty jsou ve složce [testovani](testovani). Hlavní zdroj je nenabízí, protože SandFly čte jen soubory přímo ve složce zdroje. Kdo je chce zkoušet, přidá si druhý zdroj:
+
+```
+github.com/jaxcze/sandfly-scripts/tree/main/testovani
+```
+
+| Skript | Aplikace | Co dělá |
+|---|---|---|
+| `linkedin.lua` | LinkedIn | Každý příspěvek ve feedu je jedna položka: autor, čas, text, obrázek nebo odkazovaný článek a vaše reakce. Tlačítka uvnitř příspěvku se při švihání přeskakují, reakce, komentáře a přesdílení jsou v nabídce Akce. V nastavení jde zapnout podpis autora a počty reakcí a zvolit, jestli číst celý text, nebo jen začátek. |
+
 ## Jak psát skripty
 
 Popis rozhraní je v dokumentu [Writing SandFly scripts](https://github.com/aaron-gh/SandFly/blob/master/docs/scripting.md). Strukturu obrazovky aplikace zjistíte příkazem **Copy screen tree** (Kopírovat strom obrazovky), který jde přidat do SandFly menu v části **Ovládací prvky**.
