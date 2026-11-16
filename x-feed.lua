@@ -1,7 +1,7 @@
 local manifest = {
   id = 'x-feed',
   name = 'X: příspěvky jako jedna položka',
-  version = '0.1',
+  version = '0.2',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -14,19 +14,29 @@ local manifest = {
     { key = 'readTime', type = 'switch', title = 'Číst čas příspěvku', default = true },
     { key = 'readStats', type = 'switch', title = 'Číst počty odpovědí, repostů, lajků a zobrazení', default = false },
   },
+  -- SandFly nedovoluje "has" uvnitř "inside", proto se příspěvek a jeho tlačítka rozlišují jinak:
+  -- tlačítka v příspěvku jde dlouze stisknout, samotný příspěvek ne.
   rules = {
     -- Příspěvek je klikací položka, ve které je tlačítko Odpovědět. Čte se jako jedna položka.
-    { match = { clickable = true, has = { contentDescription = 'Odpovědět' } }, group = true },
-    { match = { clickable = true, has = { contentDescription = 'Reply' } }, group = true },
-    -- Všechno klikací uvnitř příspěvku (tlačítka, obrázky, karta reklamy) se při švihání přeskakuje.
-    -- Akce příspěvku jsou v nabídce Akce, obrázky přidává tento skript.
+    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Odpovědět' } }, group = true },
+    { match = { clickable = true, longClickable = false, has = { contentDescription = 'Reply' } }, group = true },
+    -- Tlačítka pod příspěvkem se při švihání přeskakují. Jejich akce jsou v nabídce Akce příspěvku.
+    { match = { longClickable = true, has = { textContains = 'Odpověd' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'publikovat' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'lajk' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Zobrazení' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Záložk' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Sdílet' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Reply' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Repost' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Like' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'View' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Bookmark' } }, hide = 'all' },
+    { match = { longClickable = true, has = { textContains = 'Share' } }, hide = 'all' },
+    -- Obrázky v příspěvku. Jsou v nabídce Akce příspěvku, kterou doplňuje tento skript.
     {
-      match = { clickable = true, inside = { clickable = true, has = { contentDescription = 'Odpovědět' } } },
-      hide = 'all',
-    },
-    {
-      match = { clickable = true, inside = { clickable = true, has = { contentDescription = 'Reply' } } },
-      hide = 'all',
+      match = { className = 'ImageView', clickable = true, inside = { { clickable = true }, { scrollable = true } } },
+      hide = true,
     },
   },
 }
