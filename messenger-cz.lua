@@ -1,270 +1,423 @@
--- Messenger Navigace Zpráv CZ (com.facebook.orca) - Verze 4.0 + skrytí avatarů
--- 100% původní logika navigace z verze 4.0 (vidět jsou všechny zprávy, bez přeskakování),
--- doplněná pouze o pravidla skrytí mini-avatarů ("Otevřít profil...") a oddílu "Právě aktivní".
-
 local manifest = {
   id = 'messenger-fix-cz',
-  name = 'Messenger Navigace Zpráv (CZ)',
-  version = '4.0-rules-cz',
-  author = 'Tomáš Hromádka (úprava skriptu SandFly Custom)',
-  description = 'Nativní rychlost pohybu ve zprávách s automatickým odrolováním na okraji obrazovky bez útěku na tlačítka hovoru a bez avatarů.',
+  name = 'Messenger: zprávy jako jedna položka',
+  version = '5.0',
+  author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
+  homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
-  testedApiVersion = 3,
+  testedApiVersion = 5,
+  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
   apps = { 'com.facebook.orca' },
-  permissions = { 'screen', 'actions', 'input', 'speech' },
+  permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
+  settings = {
+    { key = 'readTime', type = 'switch', title = 'Číst čas zprávy', default = true },
+    { key = 'readSeen', type = 'switch', title = 'Číst, že druhý zprávu viděl', default = true },
+  },
   commands = {
-    { id = 'msg_prev', title = 'Předchozí zpráva (vlevo)', gesture = 'swipeLeft' },
-    { id = 'msg_next', title = 'Další zpráva (vpravo)', gesture = 'swipeRight' },
-    { id = 'jump_bottom', title = 'Skočit do pole pro psaní', gesture = { 'twoFingerSwipeRight', 'threeFingerSwipeRight' }, keys = 'sf+j' },
+    { id = 'message', title = 'Zprávy', control = true },
+    { id = 'compose', title = 'Přejít do pole pro psaní', menu = true, keys = 'sf+j' },
   },
   rules = {
-    -- Skrytí mini-avatarů odesílatele v konverzaci
-    { match = { contentDescription = 'Otevřít profil*' }, hide = true },
-    { match = { contentDescription = 'Open profile*' }, hide = true },
-    -- Skrytí oddílu "Právě aktivní" na seznamu chatů
-    { match = { text = 'Právě aktivní' }, hide = true },
-    { match = { contentDescription = 'Právě aktivní' }, hide = true },
-    { match = { text = 'Active now' }, hide = true },
-    { match = { contentDescription = 'Active now' }, hide = true },
+    -- Bublina zprávy je jedna položka; skript k ní přidá autora, čas a „zobrazeno“. Poklepání
+    -- udělá totéž co klepnutí na bublinu (otevře fotku nebo odkaz, u textu ukáže datum).
+    {
+      match = { longClickable = true, focusable = true, inside = { className = 'view.View', focusable = true } },
+      group = true,
+      activate = { clickable = true },
+    },
+    -- Ostatní části řádku se přeskakují, jsou ve zprávě nebo v nabídce Akce.
+    { match = { textContains = 'Otevřít profil', inside = { className = 'view.View', focusable = true } }, hide = true },
+    { match = { textContains = 'Přeposlání', inside = { className = 'view.View', focusable = true } }, hide = true },
+    { match = { textContains = 'Zobrazeno', inside = { className = 'view.View', focusable = true } }, hide = true },
+    { match = { contentDescription = 'Přidat vlastní reakci' }, hide = true },
+    { match = { textContains = 'Poklepáním dáte To se mi líbí' }, hide = true },
+    -- Datum a čas mezi zprávami („PO V 17:48“, „10:52“).
+    { match = { textContains = ':', clickable = false, focusable = false, inside = { className = 'view.View', focusable = true } }, hide = true },
+    -- Oddíl Právě aktivní v seznamu chatů.
+    { match = { text = 'Právě aktivní', clickable = false }, hide = true },
+    { match = { text = 'Active now', clickable = false }, hide = true },
   },
 }
 
--- ---------------------------------------------------------------------------
--- Pomocné funkce (100% původní verze 4.0)
--- ---------------------------------------------------------------------------
+local TITLE = 'Zpráva'
+-- Nápověda, kterou Messenger přidává za text každé zprávy.
+local HINT = ', poklepáním zobrazíte'
 
-local function nodeLabel(node)
-  if node == nil then return '' end
-  local d = node.contentDescription
-  if d ~= nil and d ~= '' then return d end
-  local t = node.text
-  if t ~= nil and t ~= '' then return t end
-  return ''
+local function present(text)
+  if text ~= nil and text ~= '' then
+    return text
+  end
 end
 
-local function quickSig(node)
-  local l = nodeLabel(node)
-  if l ~= '' then return l end
-  local kids = node:children()
-  if kids ~= nil then
-    for i = 1, #kids do
-      local kl = nodeLabel(kids[i])
-      if kl ~= '' then return kl end
+local function trim(text)
+  return ((text or ''):gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+-- Odkazy mají kolem sebe neviditelné značky směru textu.
+local function clean(text)
+  local out = {}
+  for _, code in utf8.codes(text or '') do
+    if not ((code >= 0x200B and code <= 0x200F) or (code >= 0x202A and code <= 0x202E) or (code >= 0x2066 and code <= 0x2069) or code == 0x2060) then
+      out[#out + 1] = utf8.char(code)
     end
   end
-  return ''
+  return trim(table.concat(out))
 end
 
--- Určí horní a dolní hranici samotných zpráv (pod jménem v záhlaví a nad lištou psaní)
-local function getChatZone()
-  local inputBox = sf.screen.find({ className = 'EditText' })
-  if inputBox == nil or not inputBox.visible then
+local function label_of(item)
+  return clean(present(item.contentDescription) or item.text)
+end
+
+local function is_list(item)
+  return item ~= nil and (item.className or '') == 'android.view.View' and item.focusable
+    and (item.childCount or 0) > 0
+end
+
+-- Řádek konverzace: přímý potomek seznamu zpráv.
+local function row_of(item)
+  local current = item
+  for _ = 1, 12 do
+    if current == nil then
+      return nil
+    end
+    local parent = current:parent()
+    if is_list(parent) then
+      return current
+    end
+    current = parent
+  end
+end
+
+local function bubble_of(row)
+  return row and row:find({ longClickable = true })
+end
+
+local function all_items(node, out)
+  out = out or {}
+  for _, child in ipairs(node:children() or {}) do
+    out[#out + 1] = child
+    all_items(child, out)
+  end
+  return out
+end
+
+-- Datum a čas nad zprávou: „17. 11. 2025 V 9:45“, „PO V 17:48“, „10:52“.
+local function is_time(text)
+  return text:find('^%d%d?:%d%d$') or text:find(' V %d%d?:%d%d$')
+end
+
+local DAYS = { PO = 'pondělí', ['ÚT'] = 'úterý', ST = 'středa', ['ČT'] = 'čtvrtek', ['PÁ'] = 'pátek', SO = 'sobota', NE = 'neděle' }
+
+local function nice_time(text)
+  local day, rest = text:match('^(%S+) V (.+)$')
+  if day and DAYS[day] then
+    return DAYS[day] .. ' v ' .. rest
+  end
+  return (text:gsub(' V ', ' v '))
+end
+
+-- Odkaz se čte jako doména a název stránky z adresy, bez parametrů:
+-- „www.idnes.cz: uzavirka pisarecky tunel konec omezeni plny provoz sobota“.
+local function link_name(url)
+  local domain, path = url:match('^https?://([^/?#]+)([^?#]*)')
+  if domain == nil then
+    return url
+  end
+  local best = ''
+  for segment in path:gmatch('[^/]+') do
+    segment = segment:gsub('%..*$', '')
+    if #segment > #best and segment:find('%a') then
+      best = segment
+    end
+  end
+  best = best:gsub('[-_+]', ' ')
+  if best == '' then
+    return domain
+  end
+  return domain .. ': ' .. best
+end
+
+-- Co zpráva obsahuje a kdo ji poslal. Vrací tabulku { author, body, time, seen, own, photo, ... }.
+local function parse(row)
+  local info = { parts = {} }
+  local bubble = bubble_of(row)
+  if bubble == nil then
     return nil
   end
-
-  local root = sf.screen.root()
-  local screenH = (root and root.bounds and root.bounds.bottom) or 2200
-  local screenW = (root and root.bounds and root.bounds.right) or 1080
-
-  -- Horní lišta v Messengeru zabírá cca 12-14 % výšky (včetně podnadpisu Právě aktivní pod jménem)
-  local topY = math.floor(screenH * 0.14)
-  local topBtn = sf.screen.find({ contentDescription = 'Videohovor' })
-    or sf.screen.find({ contentDescription = 'Audiohovor' })
-    or sf.screen.find({ contentDescription = 'Hovor' })
-    or sf.screen.find({ contentDescription = 'Zpět' })
-
-  if topBtn ~= nil and topBtn.bounds ~= nil and topBtn.bounds.bottom ~= nil then
-    if topBtn.bounds.bottom > 40 and topBtn.bounds.bottom < screenH * 0.25 then
-      topY = topBtn.bounds.bottom + 12
+  info.bubble = bubble
+  -- Vaše bublina je zarovnaná k pravému okraji, cizí začíná za avatarem.
+  info.own = bubble.bounds ~= nil and bubble.bounds.right >= 1000 and bubble.bounds.left > 200
+  for _, node in ipairs(all_items(row)) do
+    local text = label_of(node)
+    local inside = row_of(node) == row
+    if text == '' or not inside then
+      -- nic
+    elseif text:find('^Otevřít profil ') then
+      info.profile = node
+      info.author = info.author or text:gsub('^Otevřít profil ', '')
+    elseif text:find('^Přeposlání ') then
+      info.forward = node
+      local who, when = text:match('odeslal%(a%) (.-) v (.+)$')
+      info.forward_time = when
+      info.author = info.author or who
+    elseif text:find('^Zobrazeno') then
+      info.seen = true
+    elseif text == 'Přidat vlastní reakci' then
+      info.react = node
+    elseif text:find('^Poklepáním dáte To se mi líbí') then
+      info.like = node
+    elseif is_time(text) and node.bounds and node:parent() and not node:parent().longClickable then
+      info.time = nice_time(text)
+    elseif text:find(HINT, 1, true) then
+      -- Text zprávy: „Jméno, text zprávy, poklepáním zobrazíte…“
+      local body = text:sub(1, text:find(HINT, 1, true) - 1)
+      local name, rest = body:match('^([^,]+), (.*)$')
+      if name then
+        info.first_name = name
+        body = rest
+      end
+      info.parts[#info.parts + 1] = body
+    elseif text:find(' posílá ') then
+      local name, what = text:match('^(.-) posílá (.+)$')
+      info.first_name = info.first_name or name
+      info.parts[#info.parts + 1] = what
+    elseif text == 'Přijatá fotozpráva' or text == 'Odeslaná fotozpráva' or text:find('fotozpráva') then
+      info.photo = node
+      info.parts[#info.parts + 1] = 'fotka'
+    elseif node.className and node.className:find('Button$') and node.clickable then
+      -- Náhled odkazu: „www.idnes.cz, idnes.cz“; samotná adresa je text uvnitř.
+      info.link = node
+    elseif not node.clickable and not info.link_text and text:find('^https?://') then
+      info.link_text = text
     end
   end
+  local full = {}
+  for i, part in ipairs(info.parts) do
+    full[i] = part
+  end
+  if info.link then
+    local url = info.link_text or label_of(info.link)
+    info.parts[#info.parts + 1] = 'odkaz ' .. link_name(url)
+    full[#full + 1] = 'odkaz ' .. url
+  end
+  if #info.parts == 0 then
+    return nil
+  end
+  info.body = table.concat(info.parts, '. ')
+  info.full = table.concat(full, '\n')
+  info.time = info.time or info.forward_time
+  return info
+end
 
-  -- Spodní hranice nad lištou s tlačítky (Další možnosti / Fotoaparát / EditText)
-  local bottomY = (inputBox.bounds and inputBox.bounds.top) and (inputBox.bounds.top - 12) or math.floor(screenH * 0.88)
+local function author_of(info)
+  if info.own then
+    return 'Vy'
+  end
+  return info.first_name or info.author or 'Zpráva'
+end
 
-  return {
-    topY = topY,
-    bottomY = bottomY,
-    screenW = screenW,
-    screenH = screenH,
-    inputBox = inputBox,
+local function speech(info)
+  local said = author_of(info) .. ': ' .. info.body
+  if info.time and sf.settings.get('readTime') ~= false then
+    said = said .. '. ' .. info.time
+  end
+  if info.seen and sf.settings.get('readSeen') ~= false then
+    said = said .. ', zobrazeno'
+  end
+  return said
+end
+
+local function info_of(item)
+  local row = row_of(item)
+  return row and parse(row), row
+end
+
+-- Bublina zprávy: dlouze stisknutelná položka v seznamu zpráv.
+local function is_bubble(item)
+  return item.longClickable and row_of(item) ~= nil
+end
+
+sf.onFocus(function(item, text)
+  if not is_bubble(item) then
+    return
+  end
+  local info = info_of(item)
+  if info then
+    return speech(info)
+  end
+end)
+
+-- Akce ------------------------------------------------------------------------------------------
+
+local function fresh(item)
+  local info = info_of(item:refresh() or item)
+  if info == nil then
+    sf.speak('Zpráva tu už není', { interrupt = true })
+  end
+  return info
+end
+
+local function click(item, key, missing)
+  local info = fresh(item)
+  local target = info and info[key]
+  if target then
+    target:click()
+  elseif info then
+    sf.speak(missing, { interrupt = true })
+  end
+end
+
+local function describe(item)
+  local ok, ran = pcall(sf.commands.run, 'DESCRIBE_IMAGE')
+  if not ok or not ran then
+    sf.speak('Popis obrázku se nepodařilo spustit', { interrupt = true })
+  end
+end
+
+local function recognize(item)
+  local info = fresh(item)
+  if info == nil or info.photo == nil then
+    return
+  end
+  local ok, result = pcall(info.photo.recognizeText, info.photo)
+  local text = ok and result and trim(result.text) or ''
+  if text == '' then
+    sf.speak('Na fotce není text, nebo není celá na obrazovce', { interrupt = true })
+    return
+  end
+  sf.ui.text('Text na fotce', text)
+end
+
+sf.onActions(function(item)
+  if not is_bubble(item) then
+    return
+  end
+  local info = info_of(item)
+  if info == nil then
+    return
+  end
+  local actions = {}
+  if info.photo then
+    actions[#actions + 1] = { title = 'Popsat obrázek', first = true, run = describe }
+    actions[#actions + 1] = { title = 'Rozpoznat text na obrázku', first = true, run = recognize }
+  end
+  actions[#actions + 1] = {
+    title = 'Zobrazit celou zprávu',
+    first = true,
+    run = function(target)
+      local now = fresh(target)
+      if now then
+        sf.ui.text(TITLE, author_of(now) .. ': ' .. now.full .. (now.time and ('\n' .. now.time) or ''))
+      end
+    end,
   }
-end
-
--- Najde krajní (nejvyšší a nejnižší) viditelný prvek se zprávou v chatovací zóně
-local function getEdgeMessages(zone)
-  local all = sf.screen.findAll({ focusable = true }, 100) or {}
-  local topNode, topY = nil, 999999
-  local botNode, botY = nil, -1
-  local list = {}
-
-  for i = 1, #all do
-    local item = all[i]
-    if item.visible and item.bounds ~= nil then
-      local t = item.bounds.top or 0
-      local b = item.bounds.bottom or 0
-      local mid = (t + b) * 0.5
-      if mid > zone.topY and mid < zone.bottomY and (b - t) > 15 then
-        local sig = quickSig(item)
-        if sig ~= '' then
-          list[#list + 1] = { node = item, top = t, bottom = b, sig = sig }
-          if t < topY then
-            topY = t
-            topNode = item
-          end
-          if b > botY then
-            botY = b
-            botNode = item
-          end
-        end
+  actions[#actions + 1] = {
+    title = 'Možnosti zprávy',
+    first = true,
+    run = function(target)
+      local now = fresh(target)
+      if now then
+        now.bubble:longClick()
       end
+    end,
+  }
+  if info.forward then
+    actions[#actions + 1] = { title = 'Přeposlat', run = function(t) click(t, 'forward', 'Přeposlat tu není') end }
+  end
+  if info.like then
+    actions[#actions + 1] = { title = 'To se mi líbí', run = function(t) click(t, 'like', 'To se mi líbí tu není') end }
+  end
+  if info.react then
+    actions[#actions + 1] = { title = 'Přidat reakci', run = function(t) click(t, 'react', 'Přidat reakci tu není') end }
+  end
+  if info.profile then
+    actions[#actions + 1] = { title = 'Otevřít profil', run = function(t) click(t, 'profile', 'Profil tu není') end }
+  end
+  return actions
+end)
+
+-- Ovládací prvek čtení Zprávy -------------------------------------------------------------------
+
+local function message_list()
+  local field = sf.screen.find({ className = 'EditText' })
+  for _, view in ipairs(sf.screen.findAll({ className = 'view.View', focusable = true }, 20) or {}) do
+    if is_list(view) and (field == nil or (view.bounds and field.bounds and view.bounds.bottom <= field.bounds.top + 4)) then
+      return view
     end
   end
-
-  table.sort(list, function(a, b) return a.top < b.top end)
-  return topNode, botNode, list
 end
 
-local function scrollZone(zone, older)
-  -- Zkusíme nejprve nativní scrollBackward / scrollForward na posuvném kontejneru
-  local scrollables = sf.screen.findAll({ scrollable = true }, 10) or {}
-  for i = 1, #scrollables do
-    local s = scrollables[i]
-    if s.visible and s.bounds ~= nil then
-      local h = (s.bounds.bottom or 0) - (s.bounds.top or 0)
-      local w = (s.bounds.right or 0) - (s.bounds.left or 0)
-      if h > 300 and w > 300 then
-        local ok, res = pcall(function()
-          return older and s:scrollBackward() or s:scrollForward()
-        end)
-        if ok and res then
-          sf.sleep(220)
-          return true
-        end
-      end
+local function rows_with_messages(list)
+  local out = {}
+  for _, row in ipairs(list:children() or {}) do
+    local info = parse(row)
+    if info then
+      out[#out + 1] = { row = row, key = info.body .. '|' .. (info.time or '') }
     end
   end
+  return out
+end
 
-  -- Záložní tah prstem uprostřed zóny zpráv
-  local cx = math.floor(zone.screenW * 0.5)
-  local yUpper = math.floor(zone.screenH * 0.35)
-  local yLower = math.floor(zone.screenH * 0.72)
-
-  if older then
-    pcall(function() return sf.touch.swipe(cx, yUpper, cx, yLower, 180) end)
+-- Seznam se nehlásí jako posouvatelný, posouvá se tažením prstu uprostřed.
+local function scroll(list, newer)
+  local b = list.bounds
+  local x = (b.left + b.right) // 2
+  local top = b.top + (b.bottom - b.top) // 4
+  local bottom = b.bottom - (b.bottom - b.top) // 4
+  if newer then
+    sf.touch.swipe(x, bottom, x, top, 300)
   else
-    pcall(function() return sf.touch.swipe(cx, yLower, cx, yUpper, 180) end)
+    sf.touch.swipe(x, top, x, bottom, 300)
   end
-  sf.sleep(240)
-  return true
+  sf.sleep(500)
 end
 
--- ---------------------------------------------------------------------------
--- Ovládání šviháním: nativní pohyb uprostřed, odrolování na okrajích (100% v4.0)
--- ---------------------------------------------------------------------------
-
--- Švihnutí vlevo (k předchozí/starší zprávě)
-sf.onCommand('msg_prev', function(event)
-  local node = event.node or sf.screen.focused()
-  if node == nil or node.bounds == nil then return false end
-
-  local zone = getChatZone()
-  if zone == nil then return false end
-
-  local midY = ((node.bounds.top or 0) + (node.bounds.bottom or 0)) * 0.5
-
-  -- Jsme mimo zónu zpráv (např. nahoře na liště nebo dole v poli psaní) -> necháme nativní pohyb
-  if midY <= zone.topY or midY >= zone.bottomY then
-    return false
+sf.onCommand('message', function(event)
+  local forward = event.direction ~= 'previous'
+  local list = message_list()
+  if list == nil then
+    sf.speak('Konverzace tu není', { interrupt = true })
+    return
   end
-
-  local topNode, _, list = getEdgeMessages(zone)
-  if topNode == nil or #list == 0 then
-    return false
-  end
-
-  -- Pokud NEJSME na nejvyšší viditelné zprávě, vrátíme false -> SandFly udělá bleskový nativní krok nahoru!
-  local isAtTop = (node == topNode) or ((node.bounds.top or 0) <= (topNode.bounds.top or 0) + 12)
-  if not isAtTop then
-    return false
-  end
-
-  -- JSME NA HORNÍM OKRAJI ZPRÁV -> zablokujeme útěk na tlačítka hovoru a odrolujeme ke starším zprávám!
-  local seen = {}
-  for i = 1, #list do
-    seen[list[i].sig] = true
-  end
-
-  scrollZone(zone, true)
-
-  local _, _, newList = getEdgeMessages(zone)
-  if #newList > 0 then
-    -- Vybereme nejnižší nově načtenou zprávu, aby navazovala bez opakování
-    for i = #newList, 1, -1 do
-      if not seen[newList[i].sig] then
-        newList[i].node:focus()
-        return true
+  local focused = event.node or sf.screen.focused()
+  local current = focused and row_of(focused)
+  local info = current and parse(current)
+  local key = info and (info.body .. '|' .. (info.time or ''))
+  for attempt = 1, 3 do
+    local rows = rows_with_messages(list)
+    local index
+    for i, entry in ipairs(rows) do
+      if key ~= nil and entry.key == key then
+        index = i
       end
     end
-    newList[1].node:focus()
-  end
-
-  return true
-end)
-
--- Švihnutí vpravo (k další/novější zprávě)
-sf.onCommand('msg_next', function(event)
-  local node = event.node or sf.screen.focused()
-  if node == nil or node.bounds == nil then return false end
-
-  local zone = getChatZone()
-  if zone == nil then return false end
-
-  local midY = ((node.bounds.top or 0) + (node.bounds.bottom or 0)) * 0.5
-
-  -- Mimo zónu zpráv necháme nativní pohyb
-  if midY <= zone.topY or midY >= zone.bottomY then
-    return false
-  end
-
-  local _, botNode, list = getEdgeMessages(zone)
-  if botNode == nil or #list == 0 then
-    return false
-  end
-
-  -- Pokud NEJSME na nejnižší viditelné zprávě, vrátíme false -> SandFly udělá bleskový nativní krok dolů!
-  local isAtBottom = (node == botNode) or ((node.bounds.bottom or 0) >= (botNode.bounds.bottom or 0) - 12)
-  if not isAtBottom then
-    return false
-  end
-
-  -- JSME NA SPODNÍM OKRAJI ZPRÁV -> zkusíme odrolovat dolů k novějším zprávám
-  local seen = {}
-  for i = 1, #list do
-    seen[list[i].sig] = true
-  end
-
-  scrollZone(zone, false)
-
-  local _, _, newList = getEdgeMessages(zone)
-  for i = 1, #newList do
-    if not seen[newList[i].sig] then
-      newList[i].node:focus()
-      return true
+    local target
+    if index == nil and key == nil then
+      target = rows[forward and 1 or #rows]
+    elseif index ~= nil then
+      target = rows[index + (forward and 1 or -1)]
+    end
+    if target then
+      bubble_of(target.row):focus()
+      return
+    end
+    if attempt == 3 then
+      break
+    end
+    scroll(list, forward)
+    list = message_list()
+    if list == nil then
+      break
     end
   end
-
-  -- Žádné novější zprávy už dole nejsou -> pustíme nativní švihnutí dál do lišty psaní
-  return false
+  sf.speak(forward and 'Konec konverzace' or 'Začátek načtené konverzace', { interrupt = true })
 end)
 
--- Rychlý skok dolů do pole pro psaní zprávy
-sf.onCommand('jump_bottom', function()
-  local zone = getChatZone()
-  if zone ~= nil and zone.inputBox ~= nil and zone.inputBox.visible then
-    zone.inputBox:focus()
-    sf.speak('Pole pro zprávu')
-    return true
+sf.onCommand('compose', function()
+  local field = sf.screen.find({ className = 'EditText' })
+  if field then
+    field:focus()
+  else
+    sf.speak('Pole pro psaní tu není', { interrupt = true })
   end
-  return false
 end)
