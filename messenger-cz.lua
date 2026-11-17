@@ -1,12 +1,12 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.2',
+  version = '5.3',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz (doména a název stránky), souřadnice česky, počet reakcí, jestli byla upravená, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Otevřít polohu v mapách (aplikaci si vyberete a skript si ji zapamatuje), Otevřít odkaz, Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Zobrazit reakce, Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, telefonní čísla, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
+  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz (doména a název stránky), souřadnice česky, počet reakcí, jestli byla upravená, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Otevřít polohu v mapách (Android nabídne mapové aplikace), Sdílet polohu, Otevřít odkaz, Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Zobrazit reakce, Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, telefonní čísla, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
   apps = { 'com.facebook.orca' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs', 'system' },
   settings = {
@@ -353,77 +353,24 @@ local function recognize(item)
 end
 
 -- Poloha ---------------------------------------------------------------------------------------
--- Aplikace s mapami, které se nabídnou nahoře, když jsou nainstalované.
-local MAPS = {
-  'com.google.android.apps.maps', 'cz.seznam.mapy', 'com.waze', 'net.osmand', 'net.osmand.plus',
-  'app.organicmaps', 'com.here.app.maps', 'com.sygic.aura',
-}
-local DEFAULT = 'Výchozí aplikace Androidu'
-local OTHER = 'Jiná aplikace…'
-
 local function geo_uri(geo)
   return 'geo:' .. geo.lat .. ',' .. geo.lon .. '?q=' .. geo.lat .. ',' .. geo.lon
 end
 
--- Výběr aplikace: nejdřív mapy, pak výchozí aplikace, pak všechny aplikace.
-local function pick_maps_app()
-  local ok, apps = pcall(sf.system.apps)
-  apps = ok and apps or {}
-  local by_package = {}
-  for _, app in ipairs(apps) do
-    by_package[app.package] = app
+-- Poloha se předá Androidu: ten nabídne mapové aplikace (Jen jednou / Vždy), nebo ji otevře
+-- ve výchozí, pokud ji tak máte nastavenou.
+local function open_geo(geo)
+  local ok, opened = pcall(sf.system.openUrl, geo_uri(geo))
+  if not ok or opened == false then
+    sf.speak('Polohu nejde otevřít, v telefonu asi není aplikace s mapami', { interrupt = true })
   end
-  local names, chosen_app = {}, {}
-  for _, package in ipairs(MAPS) do
-    local app = by_package[package]
-    if app then
-      names[#names + 1] = app.label
-      chosen_app[app.label] = app
-    end
-  end
-  names[#names + 1] = DEFAULT
-  names[#names + 1] = OTHER
-  local choice = sf.ui.choose('Otevřít polohu v aplikaci', names)
-  if choice == nil then
-    return nil
-  end
-  if choice == OTHER then
-    local all = {}
-    for _, app in ipairs(apps) do
-      all[#all + 1] = app.label
-      chosen_app[app.label] = app
-    end
-    choice = sf.ui.choose('Všechny aplikace', all)
-    if choice == nil then
-      return nil
-    end
-  end
-  if choice == DEFAULT then
-    return { label = DEFAULT }
-  end
-  local app = chosen_app[choice]
-  return app and { label = app.label, package = app.package }
 end
 
--- Otevře polohu v zapamatované aplikaci. Poprvé, nebo s ask = true, se zeptá a volbu si zapamatuje.
-local function open_geo(geo, ask)
-  local app = not ask and sf.storage.get('mapsApp') or nil
-  if app == nil then
-    app = pick_maps_app()
-    if app == nil then
-      return
-    end
-    sf.storage.set('mapsApp', app)
-  end
-  if app.package == nil then
-    sf.system.openUrl(geo_uri(geo))
-    return
-  end
-  local opened = sf.system.startActivity({
-    action = 'android.intent.action.VIEW', data = geo_uri(geo), package = app.package,
-  })
-  if not opened then
-    sf.speak(app.label .. ' polohu neotevřela. Zkuste Otevřít polohu v jiné aplikaci.', { interrupt = true })
+-- Klasický sdílecí dialog Androidu s textem zprávy (název místa, souřadnice, odkaz).
+local function share_geo(item)
+  local now = fresh(item)
+  if now then
+    sf.system.share(now.full, { title = 'Sdílet polohu' })
   end
 end
 
@@ -464,22 +411,15 @@ sf.onActions(function(item)
   local front = info.photo and 3 or 1
   if info.geo then
     local geo = info.geo
-    local app = sf.storage.get('mapsApp')
     table.insert(actions, front, {
-      title = app and ('Otevřít polohu v aplikaci ' .. app.label) or 'Otevřít polohu v mapách',
+      title = 'Otevřít polohu v mapách',
       first = true,
       run = function()
-        open_geo(geo, false)
+        open_geo(geo)
       end,
     })
     front = front + 1
-    table.insert(actions, front, {
-      title = 'Otevřít polohu v jiné aplikaci',
-      first = true,
-      run = function()
-        open_geo(geo, true)
-      end,
-    })
+    table.insert(actions, front, { title = 'Sdílet polohu', first = true, run = share_geo })
     front = front + 1
   end
   for _, url in ipairs(info.urls or {}) do
