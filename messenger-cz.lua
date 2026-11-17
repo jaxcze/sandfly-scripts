@@ -1,7 +1,7 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.0',
+  version = '5.1',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -28,6 +28,7 @@ local manifest = {
     -- Ostatní části řádku se přeskakují, jsou ve zprávě nebo v nabídce Akce.
     { match = { textContains = 'Otevřít profil', inside = { className = 'view.View', focusable = true } }, hide = true },
     { match = { textContains = 'Přeposlání', inside = { className = 'view.View', focusable = true } }, hide = true },
+    { match = { contentDescription = 'Přeposlat', inside = { className = 'view.View', focusable = true } }, hide = true },
     { match = { textContains = 'Zobrazeno', inside = { className = 'view.View', focusable = true } }, hide = true },
     { match = { contentDescription = 'Přidat vlastní reakci' }, hide = true },
     { match = { textContains = 'Poklepáním dáte To se mi líbí' }, hide = true },
@@ -155,7 +156,7 @@ local function parse(row)
     elseif text:find('^Otevřít profil ') then
       info.profile = node
       info.author = info.author or text:gsub('^Otevřít profil ', '')
-    elseif text:find('^Přeposlání ') then
+    elseif text:find('^Přeposlání ') or text == 'Přeposlat' then
       info.forward = node
       local who, when = text:match('odeslal%(a%) (.-) v (.+)$')
       info.forward_time = when
@@ -184,9 +185,14 @@ local function parse(row)
     elseif text == 'Přijatá fotozpráva' or text == 'Odeslaná fotozpráva' or text:find('fotozpráva') then
       info.photo = node
       info.parts[#info.parts + 1] = 'fotka'
-    elseif node.className and node.className:find('Button$') and node.clickable then
-      -- Náhled odkazu: „www.idnes.cz, idnes.cz“; samotná adresa je text uvnitř.
+    elseif node.className and node.className:find('Button$') and node.clickable and text:find('%a%.%a') then
+      -- Náhled odkazu: „www.idnes.cz, idnes.cz“; samotná adresa je text uvnitř. Telefonní číslo
+      -- v textu je taky tlačítko, ale je už v textu zprávy.
       info.link = node
+    elseif node.className and node.className:find('Button$') and node.clickable and text:find('%d%d%d') then
+      -- Telefonní číslo v textu zprávy: tlačítko, které nabídne volání nebo SMS.
+      info.numbers = info.numbers or {}
+      info.numbers[#info.numbers + 1] = node
     elseif not node.clickable and not info.link_text and text:find('^https?://') then
       info.link_text = text
     end
@@ -321,6 +327,19 @@ sf.onActions(function(item)
       end
     end,
   }
+  for i, number in ipairs(info.numbers or {}) do
+    local digits = label_of(number)
+    actions[#actions + 1] = {
+      title = 'Číslo ' .. digits,
+      run = function(target)
+        local now = fresh(target)
+        local again = now and now.numbers and now.numbers[i]
+        if again then
+          again:click()
+        end
+      end,
+    }
+  end
   if info.forward then
     actions[#actions + 1] = { title = 'Přeposlat', run = function(t) click(t, 'forward', 'Přeposlat tu není') end }
   end
