@@ -1,12 +1,12 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.6',
+  version = '0.0.7',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = "Opravy přístupnosti aplikace De'Longhi Coffee Link. Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent; hodnotu skript přečte rozpoznáním textu na obrazovce. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry, bez tažení. Oblíbené nápoje nahoře říkají, že se poklepáním rovnou připraví, karty v seznamu otevřou detail. Průběh přípravy se ohlašuje podle nastavení. Průvodce Vytvořit říká číslo kroku a vybranou velikost, výběr profilu říká, který profil je vybraný. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají, ke kterému nápoji patří, nadpisy jsou označené a zdvojené texty skryté. Testovací verze.",
+  description = "Opravy přístupnosti aplikace De'Longhi Coffee Link. Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent; hodnotu skript přečte rozpoznáním textu na obrazovce. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry, bez tažení. Oblíbené nápoje nahoře říkají, že se poklepáním rovnou připraví, karty v seznamu otevřou detail. Průběh přípravy se ohlašuje podle nastavení. Průvodce Vytvořit říká číslo kroku, vybranou velikost a pořadí obrázku. Průvodce Bean Adapt říká číslo kroku, stav voleb směsi a pražení a úroveň mletí na kolečku mlýnku (v nabídce Akce je Vybrat úroveň mletí ze seznamu); tlačítko OK v kroku Příprava upozorní, že spustí přípravu espressa. Výběr profilu říká, který profil je vybraný. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají, ke kterému nápoji patří, nadpisy jsou označené a zdvojené texty skryté. Testovací verze.",
   apps = { 'it.delonghi' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
@@ -116,6 +116,18 @@ local manifest = {
     { id = 'backButton', label = 'Předchozí krok' },
     { id = 'ingredientParamsList', group = true },
     { id = 'infoIcon', hide = true },
+
+    -- Bean Adapt: průvodce o pěti krocích (Směs, Pražení, Mletí, Příprava, Chuť).
+    { id = 'titleTv', heading = true },
+    { id = 'beanAdaptTitle', heading = true },
+    { id = 'selectionButton', hide = true },
+    { id = 'beanAdaptInfoButton', label = 'Informace' },
+    { id = 'tv_grinderValue', hide = true },
+    { id = 'tv_1', hide = true }, { id = 'tv_2', hide = true }, { id = 'tv_3', hide = true },
+    { id = 'tv_4', hide = true }, { id = 'tv_5', hide = true }, { id = 'tv_6', hide = true },
+    { id = 'tv_7', hide = true },
+    -- Vodní filtr: příručka v okně prohlížeče.
+    { id = 'webViewBackBtn', label = 'Zpět' },
 
     -- Detail nápoje: parametry dole jsou jedna položka, např. „Množství kávy 160.0 ml, Intenzita Jemná“.
     { id = 'beverageParamsList', group = true },
@@ -356,7 +368,52 @@ local function active_profile()
   return name
 end
 
-local STEPS = { ['Velikost'] = 1, ['Přísady'] = 2, ['Název'] = 3 }
+local STEPS = { ['Velikost'] = 1, ['Přísady'] = 2, ['Název'] = 3, ['Název a obrázek'] = 3 }
+-- Bean Adapt: nadpis kroku → číslo kroku a název v ukazateli kroků (ukazatel je jen obrázek).
+local BEAN_STEPS = {
+  ['Kávová směs'] = { 1, 'Směs' },
+  ['Úroveň pražení'] = { 2, 'Pražení' },
+  ['Úroveň mletí'] = { 3, 'Mletí' },
+  ['Příprava espressa'] = { 4, 'Příprava' },
+}
+-- Kolečko mlýnku: přepínače bez názvu, pořadí ve stromu neodpovídá hodnotám.
+local GRIND = { '1', '1_5', '2', '2_5', '3', '3_5', '4', '4_5', '5', '5_5', '6', '6_5', '7' }
+
+local function in_bean_adapt()
+  return ((sf.app() or {}).activity or ''):find('BeanAdapt') ~= nil
+end
+
+local function grind_label(value)
+  return (value:gsub('_', ','))
+end
+
+local function choose_grind()
+  local names, current = {}, nil
+  for i, value in ipairs(GRIND) do
+    local radio = sf.screen.find({ id = 'rb_' .. value })
+    names[i] = 'Úroveň ' .. grind_label(value) .. ((radio and radio.checked) and ', vybráno' or '')
+  end
+  -- sf.ui.choose vrací text vybrané položky.
+  local chosen = sf.ui.choose('Úroveň mletí', names)
+  for i, name in ipairs(names) do
+    if name == chosen then
+      local radio = sf.screen.find({ id = 'rb_' .. GRIND[i] })
+      if radio then
+        radio:click()
+        sf.speak('Úroveň mletí ' .. grind_label(GRIND[i]), { interrupt = true })
+      end
+    end
+  end
+end
+
+local function bean_step(item, text)
+  local title = trim(text_of(item))
+  local step = in_bean_adapt() and BEAN_STEPS[title]
+  if step then
+    return 'Krok ' .. step[1] .. ' z 5, ' .. step[2] .. ': ' .. title .. ', nadpis'
+  end
+  return text
+end
 
 -- Změnit ikonku: ikony a barvy jsou jen obrázky, pořadí podle obrazovky z listopadu 2026.
 ICONS = { 'Ikona 1: postava s krátkými vlasy', 'Ikona 2: postava s delšími vlasy', 'Ikona 3: postava s krátkými vlasy, jiný účes' }
@@ -413,10 +470,24 @@ local SPECIAL = {
     local name = text_of(item:find({ id = 'nameSelection' }))
     local size = text_of(item:find({ id = 'subNameSelection' }))
     local said = name .. (size ~= '' and (', ' .. size) or '')
+    if name == '' then
+      -- Krok Název a obrázek: obrázky nápoje nemají název.
+      said = 'Obrázek ' .. (index_among(item) or '')
+    end
     if radio and radio.checked then
       said = said .. ', vybráno'
     end
     return said
+  end,
+  -- Bean Adapt: nadpis kroku řekne číslo kroku.
+  beanAdaptTitle = bean_step,
+  title = bean_step,
+  -- Bean Adapt, krok Příprava: OK spustí přípravu zkušebního espressa.
+  nextButtonText = function(item, text)
+    if in_bean_adapt() and text_of(item) == 'OK' then
+      return 'OK, spustí přípravu zkušebního espressa, tlačítko'
+    end
+    return text
   end,
   -- Přísady: Upravit a Odebrat u karty přísady.
   ingredientParamEdit = function(item)
@@ -529,6 +600,17 @@ sf.onFocus(function(item, text)
     return false
   end
   seek = nil
+  -- Bean Adapt, kolečko mlýnku: přepínač rb_4_5 je úroveň 4,5.
+  local grind = id:match('^rb_([%d_]+)$')
+  if grind then
+    return 'Úroveň mletí ' .. grind_label(grind) .. (item.checked and ', vybráno' or '') .. ', přepínač'
+  end
+  -- Bean Adapt, směs a pražení: karta s textem, přepínač v ní je skrytý.
+  if (item.className or ''):find('CardView$') and item:find({ id = 'selectionText' }) then
+    local radio = item:find({ id = 'selectionButton' })
+    return text_of(item:find({ id = 'selectionText' })) .. ((radio and radio.checked) and ', vybráno' or '')
+      .. ', přepínač'
+  end
   if id == 'prefIconButton' or id == 'beverageBrewButton' then
     sf.setTimeout(function()
       local name = drink_name(item)
@@ -596,6 +678,9 @@ sf.onActions(function(item)
       { title = 'Vybrat hodnotu ze seznamu', first = true, run = choose_value },
       { title = 'Přečíst hodnotu', run = function(target) announce_value(target, 0) end },
     }
+  end
+  if id:find('^rb_[%d_]+$') then
+    return { { title = 'Vybrat úroveň mletí ze seznamu', first = true, run = choose_grind } }
   end
   if id == 'beverageParamsList' or id == 'beverageName' or id == 'button_brew_1' then
     return { { title = 'Upravit parametry', first = true, run = open_params } }
