@@ -37,6 +37,7 @@ github.com/jaxcze/sandfly-scripts/tree/main/testovani
 |---|---|---|
 | `linkedin.lua` | LinkedIn | Každý příspěvek ve feedu je jedna položka: autor, čas, text, obrázek nebo odkazovaný článek a vaše reakce. Tlačítka uvnitř příspěvku se při švihání přeskakují, reakce, komentáře a přesdílení jsou v nabídce Akce. V nastavení jde zapnout podpis autora a počty reakcí a zvolit, jestli číst celý text, nebo jen začátek. |
 | `coffeelink.lua` | De'Longhi Coffee Link | Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent, přečtenou rozpoznáním textu. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry na detailu nápoje, bez tažení. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají název nápoje, nadpisy jsou označené. |
+| `cgtransit.lua` | CG Transit | Detail spojení: každý úsek se přečte jako věta (spoj, odjezd, mezizastávky, příjezd, směr) bez znaků z ikonového písma, s nástupištěm a „na znamení“; tarifní pásma a dopravce jde zapnout. Hlavní obrazovka: Odkud a Kam místo „null:“, záložky říkají, která je vybraná, seznam tras se při vstupu ohlásí jménem záložky a oblíbené i úprava trasy jsou v nabídce Akce. |
 
 ## Jak psát skripty
 
