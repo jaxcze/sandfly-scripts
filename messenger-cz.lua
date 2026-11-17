@@ -1,21 +1,25 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.3',
+  version = '5.4',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz (doména a název stránky), souřadnice česky, počet reakcí, jestli byla upravená, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Otevřít polohu v mapách (Android nabídne mapové aplikace), Sdílet polohu, Otevřít odkaz, Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Zobrazit reakce, Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, telefonní čísla, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
+  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz (doména a název stránky), souřadnice česky, počet reakcí, jestli byla upravená, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují; švihnutí přes první zprávu na obrazovce načte starší zprávy a přes poslední novější, místo aby fokus utekl z konverzace. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Otevřít polohu v mapách (Android nabídne mapové aplikace), Sdílet polohu, Otevřít odkaz, Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Zobrazit reakce, Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, telefonní čísla, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
   apps = { 'com.facebook.orca' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs', 'system' },
   settings = {
     { key = 'readTime', type = 'switch', title = 'Číst čas zprávy', default = true },
     { key = 'readSeen', type = 'switch', title = 'Číst, že druhý zprávu viděl', default = true },
+    { key = 'autoScroll', type = 'switch', title = 'Švihnutím přes první zprávu načíst starší', summary = 'Na první zprávě na obrazovce švihnutí na předchozí položku posune konverzaci ke starším zprávám, na poslední zprávě švihnutí na další k novějším. Vypnuté: fokus přejde na tlačítka nahoře nebo na pole pro psaní.', default = true },
   },
   commands = {
     { id = 'message', title = 'Zprávy', control = true },
     { id = 'compose', title = 'Přejít do pole pro psaní', menu = true, keys = 'sf+j' },
+    -- Na první a poslední zprávě na obrazovce posune konverzaci, jinak běžné švihnutí.
+    { id = 'olderSwipe', title = 'Předchozí položka, na první zprávě načíst starší', gesture = 'swipeLeft' },
+    { id = 'newerSwipe', title = 'Další položka, na poslední zprávě načíst novější', gesture = 'swipeRight' },
   },
   rules = {
     -- Bublina zprávy je jedna položka; skript k ní přidá autora, čas a „zobrazeno“. Poklepání
@@ -477,12 +481,17 @@ local function message_list()
   end
 end
 
+-- Zpráva se po posunutí pozná podle obsahu. Čas ne: datum nad zprávou bývá i mimo obrazovku.
+local function key_of(info)
+  return info and ((info.own and 'Vy|' or '|') .. info.body)
+end
+
 local function rows_with_messages(list)
   local out = {}
   for _, row in ipairs(list:children() or {}) do
     local info = parse(row)
     if info then
-      out[#out + 1] = { row = row, key = info.body .. '|' .. (info.time or '') }
+      out[#out + 1] = { row = row, key = key_of(info) }
     end
   end
   return out
@@ -502,17 +511,8 @@ local function scroll(list, newer)
   sf.sleep(500)
 end
 
-sf.onCommand('message', function(event)
-  local forward = event.direction ~= 'previous'
-  local list = message_list()
-  if list == nil then
-    sf.speak('Konverzace tu není', { interrupt = true })
-    return
-  end
-  local focused = event.node or sf.screen.focused()
-  local current = focused and row_of(focused)
-  local info = current and parse(current)
-  local key = info and (info.body .. '|' .. (info.time or ''))
+-- Přejde na sousední zprávu; když je zpráva na kraji obrazovky, konverzaci posune.
+local function move(list, key, forward)
   for attempt = 1, 3 do
     local rows = rows_with_messages(list)
     local index
@@ -540,7 +540,54 @@ sf.onCommand('message', function(event)
       break
     end
   end
-  sf.speak(forward and 'Konec konverzace' or 'Začátek načtené konverzace', { interrupt = true })
+  sf.speak(forward and 'Konec konverzace' or 'Začátek konverzace', { interrupt = true })
+end
+
+sf.onCommand('message', function(event)
+  local forward = event.direction ~= 'previous'
+  local list = message_list()
+  if list == nil then
+    sf.speak('Konverzace tu není', { interrupt = true })
+    return
+  end
+  local focused = event.node or sf.screen.focused()
+  local current = focused and row_of(focused)
+  move(list, key_of(current and parse(current)), forward)
+end)
+
+-- Švihnutí na předchozí nebo další položku: SandFly je nechá být, jen na první zprávě na obrazovce
+-- (předchozí by byla tlačítka nahoře) a na poslední, pod kterou jsou novější zprávy, konverzaci
+-- posune, místo aby fokus utekl z konverzace.
+local function edge_swipe(event, forward)
+  if sf.settings.get('autoScroll') == false then
+    return false
+  end
+  local node = event.node or sf.screen.focused()
+  if node == nil or not is_bubble(node) then
+    return false
+  end
+  local list = message_list()
+  local key = key_of(parse(row_of(node)))
+  if list == nil or key == nil then
+    return false
+  end
+  local rows = rows_with_messages(list)
+  local edge = rows[forward and #rows or 1]
+  if edge == nil or edge.key ~= key then
+    return false
+  end
+  if forward and sf.screen.find({ contentDescription = 'Přejít na poslední zprávu' }) == nil then
+    return false
+  end
+  move(list, key, forward)
+end
+
+sf.onCommand('olderSwipe', function(event)
+  return edge_swipe(event, false)
+end)
+
+sf.onCommand('newerSwipe', function(event)
+  return edge_swipe(event, true)
 end)
 
 sf.onCommand('compose', function()
