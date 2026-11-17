@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.2',
+  version = '0.0.3',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -75,6 +75,11 @@ local manifest = {
     { id = 'btn_edit_profile_iw', hide = true },
     { id = 'btn_go_to_settings', hide = true },
     { id = 'btn_go_to_manuals', hide = true },
+    { id = 'password_value_modify_tv', label = 'Upravit heslo' },
+    { id = 'information_text_tv', heading = true },
+    { id = 'password_text_tv', heading = true },
+    { id = 'select_color_text', heading = true },
+    { id = 'title', heading = true },
 
     -- Nastavení kávovaru: přepínače mají název, text vedle nich se neopakuje.
     { id = 'energy_saving_toggle', label = 'Úspora energie' },
@@ -335,6 +340,10 @@ end
 
 local STEPS = { ['Velikost'] = 1, ['Přísady'] = 2, ['Název'] = 3 }
 
+-- Změnit ikonku: ikony a barvy jsou jen obrázky, pořadí podle obrazovky z listopadu 2026.
+ICONS = { 'Ikona 1: postava s krátkými vlasy', 'Ikona 2: postava s delšími vlasy', 'Ikona 3: postava s krátkými vlasy, jiný účes' }
+COLORS = { 'Modrá', 'Zelená', 'Oranžová', 'Růžová' }
+
 local SPECIAL = {
   -- Výběr profilu na obrazovce Účet.
   profile_container = function(item, text)
@@ -475,9 +484,10 @@ sf.onFocus(function(item, text)
   end
   if id == 'circle_image_view' or id == 'profile_image_view' then
     sf.setTimeout(function()
-      local n = index_among(item) or ''
-      local label = id == 'circle_image_view' and 'Barva ' or 'Ikona '
-      sf.speak(label .. n .. (item.selected and ', vybráno' or '') .. ', tlačítko', { interrupt = true })
+      local n = index_among(item)
+      local names = id == 'circle_image_view' and COLORS or ICONS
+      local label = n and names[n] or ((id == 'circle_image_view' and 'Barva ' or 'Ikona ') .. (n or ''))
+      sf.speak(label .. (item.selected and ', vybráno' or '') .. ', tlačítko', { interrupt = true })
     end, 0)
     return false
   end
