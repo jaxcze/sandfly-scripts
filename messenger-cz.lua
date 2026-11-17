@@ -1,7 +1,7 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.4',
+  version = '5.5',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -497,18 +497,68 @@ local function rows_with_messages(list)
   return out
 end
 
--- Seznam se nehlásí jako posouvatelný, posouvá se tažením prstu uprostřed.
+-- Podpis toho, co je teď v seznamu vidět, aby šlo poznat, že se seznam přestal hýbat.
+local function snapshot()
+  local list = message_list()
+  if list == nil then
+    return nil, ''
+  end
+  local keys = {}
+  for _, entry in ipairs(rows_with_messages(list)) do
+    keys[#keys + 1] = entry.key .. '@' .. (bubble_of(entry.row).bounds.top or 0)
+  end
+  return list, table.concat(keys, ';')
+end
+
+-- Seznam se nehlásí jako posouvatelný, posouvá se tažením prstu uprostřed. Táhne se pomalu,
+-- aby seznam po puštění nedojížděl setrvačností, a čeká se, až se přestane hýbat.
 local function scroll(list, newer)
   local b = list.bounds
   local x = (b.left + b.right) // 2
+  local span = (b.bottom - b.top) * 2 // 5
   local top = b.top + (b.bottom - b.top) // 4
-  local bottom = b.bottom - (b.bottom - b.top) // 4
+  local bottom = top + span
   if newer then
-    sf.touch.swipe(x, bottom, x, top, 300)
+    sf.touch.swipe(x, bottom, x, top, 900)
   else
-    sf.touch.swipe(x, top, x, bottom, 300)
+    sf.touch.swipe(x, top, x, bottom, 900)
   end
-  sf.sleep(500)
+  local fresh_list, before = snapshot()
+  for _ = 1, 8 do
+    sf.sleep(250)
+    local again, now = snapshot()
+    fresh_list = again
+    if now == before then
+      break
+    end
+    before = now
+  end
+  return fresh_list
+end
+
+-- Přesune fokus na zprávu a ověří, že tam zůstal; seznam řádky po posunutí ještě přestavuje.
+local function focus_message(key)
+  for _ = 1, 4 do
+    local list = message_list()
+    if list == nil then
+      return
+    end
+    for _, entry in ipairs(rows_with_messages(list)) do
+      if entry.key == key then
+        bubble_of(entry.row):focus()
+        sf.sleep(200)
+        local focused = sf.screen.focused()
+        local row = focused and row_of(focused)
+        if row and key_of(parse(row)) == key then
+          return true
+        end
+        sf.log('Fokus se na zprávě neudržel, znovu')
+        break
+      end
+    end
+    sf.sleep(250)
+  end
+  sf.log('Fokus na zprávu se nepodařilo přesunout: ' .. key)
 end
 
 -- Přejde na sousední zprávu; když je zpráva na kraji obrazovky, konverzaci posune.
@@ -528,14 +578,20 @@ local function move(list, key, forward)
       target = rows[index + (forward and 1 or -1)]
     end
     if target then
-      bubble_of(target.row):focus()
+      if attempt == 1 then
+        bubble_of(target.row):focus()
+      elseif not focus_message(target.key) then
+        -- Aspoň přečíst zprávu, na kterou se fokus nedostal.
+        local info = parse(target.row)
+        sf.speak(info and speech(info) or 'Fokus se nepodařilo přesunout', { interrupt = true })
+      end
       return
     end
     if attempt == 3 then
       break
     end
-    scroll(list, forward)
-    list = message_list()
+    sf.log('Posouvám konverzaci ' .. (forward and 'k novějším' or 'ke starším'))
+    list = scroll(list, forward)
     if list == nil then
       break
     end
