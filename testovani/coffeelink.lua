@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.5',
+  version = '0.0.6',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -76,6 +76,13 @@ local manifest = {
     { id = 'btn_go_to_settings', hide = true },
     { id = 'btn_go_to_manuals', hide = true },
     { id = 'password_value_modify_tv', label = 'Upravit heslo' },
+    -- Nastavení kávovaru: nadpisy podstránek, řádky statistiky jako jedna položka.
+    { id = 'water_hardness_title_tv', heading = true },
+    { id = 'aut_off_title_tv', heading = true },
+    { id = 'aut_on_title_tv', heading = true },
+    { id = 'statistic_title_tv', heading = true },
+    { match = { parentId = 'statisticsRw' }, group = true },
+    { id = 'info_icon', hide = true },
     { id = 'information_text_tv', heading = true },
     { id = 'password_text_tv', heading = true },
     { id = 'select_color_text', heading = true },
@@ -179,7 +186,11 @@ local token = 0
 local function param_name(item)
   local parent = item:parent()
   local name = parent and parent:find({ id = 'param_text' })
-  return text_of(name)
+  if name then
+    return text_of(name)
+  end
+  -- Tvrdost vody v nastavení kávovaru: posuvník bez názvu, název je nadpis obrazovky.
+  return text_of(sf.screen.find({ id = 'water_hardness_title_tv' }))
 end
 
 -- Hodnotu (160.0 ml, Jemná) aplikace jen kreslí pod jezdec, do přístupnosti ji nedává.
