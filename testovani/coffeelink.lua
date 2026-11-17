@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.3',
+  version = '0.0.4',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -150,16 +150,23 @@ local function drink_name(item)
   return text_of(sf.screen.find({ id = 'beverageName' }))
 end
 
--- Pořadí položky mezi sourozenci se stejným id, např. 2. barva.
+-- Pořadí položky mezi položkami se stejným id, např. 2. barva. Každá bývá ve vlastním obalu,
+-- proto se hledá v nejbližším předkovi, který jich obsahuje víc.
 local function index_among(item)
-  local parent = item:parent()
-  local count = 0
-  for _, child in ipairs(parent and parent:children() or {}) do
-    if child.id == item.id then
-      count = count + 1
-      if child == item then
-        return count
+  local node = item
+  for _ = 1, 4 do
+    node = node:parent()
+    if node == nil then
+      return nil
+    end
+    local same = node:findAll({ id = short_id(item) }, 20)
+    if #same > 1 then
+      for i, other in ipairs(same) do
+        if other == item then
+          return i
+        end
       end
+      return nil
     end
   end
 end
