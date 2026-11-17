@@ -1,14 +1,14 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.1',
+  version = '5.2',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
+  description = 'V konverzaci Messengeru je každá zpráva jedna položka: kdo ji poslal (Vy nebo jméno), text, fotka, samolepka nebo odkaz (doména a název stránky), souřadnice česky, počet reakcí, jestli byla upravená, čas a jestli ji druhý viděl. Švihání zůstává jako v SandFly, avatary, časy a tlačítka u zprávy se přeskakují. Ovládací prvek čtení Zprávy přechází po zprávách a konverzaci sám posouvá. Akce u zprávy: Otevřít polohu v mapách (aplikaci si vyberete a skript si ji zapamatuje), Otevřít odkaz, Zobrazit celou zprávu, Možnosti zprávy (odpovědět, reagovat, kopírovat…), Zobrazit reakce, Přeposlat, To se mi líbí, Přidat reakci, Otevřít profil, telefonní čísla, u fotky Popsat obrázek a Rozpoznat text na obrázku. Příkaz Přejít do pole pro psaní je v SandFly menu a na SandFly+J.',
   apps = { 'com.facebook.orca' },
-  permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
+  permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs', 'system' },
   settings = {
     { key = 'readTime', type = 'switch', title = 'Číst čas zprávy', default = true },
     { key = 'readSeen', type = 'switch', title = 'Číst, že druhý zprávu viděl', default = true },
@@ -32,6 +32,8 @@ local manifest = {
     { match = { textContains = 'Zobrazeno', inside = { className = 'view.View', focusable = true } }, hide = true },
     { match = { contentDescription = 'Přidat vlastní reakci' }, hide = true },
     { match = { textContains = 'Poklepáním dáte To se mi líbí' }, hide = true },
+    -- „Upraveno“ nad zprávou: řekne se u zprávy.
+    { match = { focusable = true, has = { text = 'Upraveno' }, inside = { className = 'view.View', focusable = true } }, hide = 'all' },
     -- Datum a čas mezi zprávami („PO V 17:48“, „10:52“).
     { match = { textContains = ':', clickable = false, focusable = false, inside = { className = 'view.View', focusable = true } }, hide = true },
     -- Oddíl Právě aktivní v seznamu chatů.
@@ -131,11 +133,38 @@ local function link_name(url)
       best = segment
     end
   end
-  best = best:gsub('[-_+]', ' ')
-  if best == '' then
+  -- Krátký odkaz (mapy.com/s/dalelanufa) nemá v adrese název, řekne se jen doména.
+  if best == '' or not best:find('[-_+]') then
     return domain
   end
-  return domain .. ': ' .. best
+  return domain .. ': ' .. best:gsub('[-_+]', ' ')
+end
+
+-- Souřadnice v textu, jak je posílají Mapy.com: „49.1411795N, 16.6666782E“.
+local function geo_of(text)
+  local lat, ns, lon, ew = text:match('(%d+%.%d+)%s*([NS]),%s*(%d+%.%d+)%s*([EW])')
+  if lat then
+    return {
+      lat = (ns == 'S' and '-' or '') .. lat,
+      lon = (ew == 'W' and '-' or '') .. lon,
+      said = lat:gsub('%.', ',') .. (ns == 'N' and ' severní šířky, ' or ' jižní šířky, ')
+        .. lon:gsub('%.', ',') .. (ew == 'E' and ' východní délky' or ' západní délky'),
+      raw = text:match('%d+%.%d+%s*[NS],%s*%d+%.%d+%s*[EW]'),
+    }
+  end
+end
+
+-- Text zprávy k přečtení: souřadnice česky, adresy jako doména a název stránky.
+local function say_text(text)
+  local geo = geo_of(text)
+  if geo then
+    local s, e = text:find(geo.raw, 1, true)
+    text = text:sub(1, s - 1) .. 'souřadnice ' .. geo.said .. text:sub(e + 1)
+  end
+  text = text:gsub('https?://[^%s,]+', function(url)
+    return 'odkaz ' .. link_name(url)
+  end)
+  return (text:gsub('\n', ', '))
 end
 
 -- Co zpráva obsahuje a kdo ji poslal. Vrací tabulku { author, body, time, seen, own, photo, ... }.
@@ -185,32 +214,61 @@ local function parse(row)
     elseif text == 'Přijatá fotozpráva' or text == 'Odeslaná fotozpráva' or text:find('fotozpráva') then
       info.photo = node
       info.parts[#info.parts + 1] = 'fotka'
-    elseif node.className and node.className:find('Button$') and node.clickable and text:find('%a%.%a') then
-      -- Náhled odkazu: „www.idnes.cz, idnes.cz“; samotná adresa je text uvnitř. Telefonní číslo
-      -- v textu je taky tlačítko, ale je už v textu zprávy.
-      info.link = node
-    elseif node.className and node.className:find('Button$') and node.clickable and text:find('%d%d%d') then
-      -- Telefonní číslo v textu zprávy: tlačítko, které nabídne volání nebo SMS.
-      info.numbers = info.numbers or {}
-      info.numbers[#info.numbers + 1] = node
+    elseif text:find('^%d+ reakc') then
+      -- „1 reakce“: Messenger neříká jaká, jen kolik. Klepnutí ukáže, kdo a čím reagoval.
+      info.reactions = node
+      info.reactions_text = text
+    elseif text == 'Upraveno' then
+      info.edited = true
+    elseif node.className and node.className:find('Button$') and node.clickable then
+      -- Odkaz, souřadnice nebo telefonní číslo v textu zprávy, nebo náhled odkazu.
+      info.buttons = info.buttons or {}
+      info.buttons[#info.buttons + 1] = node
     elseif not node.clickable and not info.link_text and text:find('^https?://') then
       info.link_text = text
     end
   end
-  local full = {}
+  local raw = table.concat(info.parts, '\n')
+  info.geo = geo_of(raw)
+  info.urls, info.numbers = {}, {}
+  for _, button in ipairs(info.buttons or {}) do
+    local text = label_of(button)
+    if text:find('^https?://') then
+      info.urls[#info.urls + 1] = text
+    elseif raw:find(text, 1, true) then
+      -- Tlačítko je kus textu zprávy: souřadnice (ty jsou v akci polohy), nebo číslo.
+      if not (info.geo and text:find('^%-?%d+%.%d+$')) and text:find('%d%d%d') then
+        info.numbers[#info.numbers + 1] = button
+      end
+    elseif text:find('%a%.%a') then
+      -- Náhled odkazu: „www.idnes.cz, idnes.cz“; samotná adresa je text uvnitř.
+      info.link = button
+    end
+  end
+  local spoken, full = {}, {}
   for i, part in ipairs(info.parts) do
+    spoken[i] = say_text(part)
     full[i] = part
   end
   if info.link then
     local url = info.link_text or label_of(info.link)
-    info.parts[#info.parts + 1] = 'odkaz ' .. link_name(url)
+    spoken[#spoken + 1] = 'odkaz ' .. link_name(url)
     full[#full + 1] = 'odkaz ' .. url
+    if url:find('^https?://') then
+      info.urls[#info.urls + 1] = url
+    end
   end
-  if #info.parts == 0 then
+  if #spoken == 0 then
     return nil
   end
-  info.body = table.concat(info.parts, '. ')
+  info.body = table.concat(spoken, '. ')
   info.full = table.concat(full, '\n')
+  if info.reactions_text then
+    info.body = info.body .. ', ' .. info.reactions_text
+  end
+  if info.edited then
+    info.body = info.body .. ', upraveno'
+  end
   info.time = info.time or info.forward_time
   return info
 end
@@ -225,7 +283,7 @@ end
 local function speech(info)
   local said = author_of(info) .. ': ' .. info.body
   if info.time and sf.settings.get('readTime') ~= false then
-    said = said .. '. ' .. info.time
+    said = said .. (said:find('[.!?]$') and ' ' or '. ') .. info.time
   end
   if info.seen and sf.settings.get('readSeen') ~= false then
     said = said .. ', zobrazeno'
@@ -294,6 +352,81 @@ local function recognize(item)
   sf.ui.text('Text na fotce', text)
 end
 
+-- Poloha ---------------------------------------------------------------------------------------
+-- Aplikace s mapami, které se nabídnou nahoře, když jsou nainstalované.
+local MAPS = {
+  'com.google.android.apps.maps', 'cz.seznam.mapy', 'com.waze', 'net.osmand', 'net.osmand.plus',
+  'app.organicmaps', 'com.here.app.maps', 'com.sygic.aura',
+}
+local DEFAULT = 'Výchozí aplikace Androidu'
+local OTHER = 'Jiná aplikace…'
+
+local function geo_uri(geo)
+  return 'geo:' .. geo.lat .. ',' .. geo.lon .. '?q=' .. geo.lat .. ',' .. geo.lon
+end
+
+-- Výběr aplikace: nejdřív mapy, pak výchozí aplikace, pak všechny aplikace.
+local function pick_maps_app()
+  local ok, apps = pcall(sf.system.apps)
+  apps = ok and apps or {}
+  local by_package = {}
+  for _, app in ipairs(apps) do
+    by_package[app.package] = app
+  end
+  local names, chosen_app = {}, {}
+  for _, package in ipairs(MAPS) do
+    local app = by_package[package]
+    if app then
+      names[#names + 1] = app.label
+      chosen_app[app.label] = app
+    end
+  end
+  names[#names + 1] = DEFAULT
+  names[#names + 1] = OTHER
+  local choice = sf.ui.choose('Otevřít polohu v aplikaci', names)
+  if choice == nil then
+    return nil
+  end
+  if choice == OTHER then
+    local all = {}
+    for _, app in ipairs(apps) do
+      all[#all + 1] = app.label
+      chosen_app[app.label] = app
+    end
+    choice = sf.ui.choose('Všechny aplikace', all)
+    if choice == nil then
+      return nil
+    end
+  end
+  if choice == DEFAULT then
+    return { label = DEFAULT }
+  end
+  local app = chosen_app[choice]
+  return app and { label = app.label, package = app.package }
+end
+
+-- Otevře polohu v zapamatované aplikaci. Poprvé, nebo s ask = true, se zeptá a volbu si zapamatuje.
+local function open_geo(geo, ask)
+  local app = not ask and sf.storage.get('mapsApp') or nil
+  if app == nil then
+    app = pick_maps_app()
+    if app == nil then
+      return
+    end
+    sf.storage.set('mapsApp', app)
+  end
+  if app.package == nil then
+    sf.system.openUrl(geo_uri(geo))
+    return
+  end
+  local opened = sf.system.startActivity({
+    action = 'android.intent.action.VIEW', data = geo_uri(geo), package = app.package,
+  })
+  if not opened then
+    sf.speak(app.label .. ' polohu neotevřela. Zkuste Otevřít polohu v jiné aplikaci.', { interrupt = true })
+  end
+end
+
 sf.onActions(function(item)
   if not is_bubble(item) then
     return
@@ -327,6 +460,44 @@ sf.onActions(function(item)
       end
     end,
   }
+  -- Poloha a odkazy jsou v nabídce hned na začátku.
+  local front = info.photo and 3 or 1
+  if info.geo then
+    local geo = info.geo
+    local app = sf.storage.get('mapsApp')
+    table.insert(actions, front, {
+      title = app and ('Otevřít polohu v aplikaci ' .. app.label) or 'Otevřít polohu v mapách',
+      first = true,
+      run = function()
+        open_geo(geo, false)
+      end,
+    })
+    front = front + 1
+    table.insert(actions, front, {
+      title = 'Otevřít polohu v jiné aplikaci',
+      first = true,
+      run = function()
+        open_geo(geo, true)
+      end,
+    })
+    front = front + 1
+  end
+  for _, url in ipairs(info.urls or {}) do
+    table.insert(actions, front, {
+      title = 'Otevřít odkaz ' .. link_name(url),
+      first = true,
+      run = function()
+        sf.system.openUrl(url)
+      end,
+    })
+    front = front + 1
+  end
+  if info.reactions then
+    actions[#actions + 1] = {
+      title = 'Zobrazit reakce',
+      run = function(t) click(t, 'reactions', 'Reakce tu nejsou') end,
+    }
+  end
   for i, number in ipairs(info.numbers or {}) do
     local digits = label_of(number)
     actions[#actions + 1] = {
