@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.4',
+  version = '0.0.5',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -377,7 +377,7 @@ local SPECIAL = {
     if name == '' then
       return text
     end
-    return name .. ', oblíbený nápoj, poklepáním se rovnou připraví'
+    return name .. ', poklepáním se rovnou připraví'
   end,
   -- Karta nápoje v seznamu otevře detail s parametry.
   cardContainer = function(item, text)
@@ -459,10 +459,59 @@ sf.onContentChange(function(event)
   end
 end)
 
+-- Oblasti se seznamy nápojů: při vstupu do oblasti se nejdřív řekne její název, jako legenda
+-- skupiny formuláře. Uvnitř oblasti už ne, dokud fokus neodejde jinam.
+local REGIONS = {
+  favoriteBeverages = 'Oblíbené nápoje, rychlá příprava',
+  hot_beverages_list = 'Horké nápoje',
+  iced_beverages_list = 'Studené nápoje',
+  beverages_rv = 'Oblíbené nápoje',
+}
+local IN_REGION = {
+  favorite_recipe_item_layout = true, cardContainer = true, prefIconButton = true, beverageBrewButton = true,
+}
+local current_region
+
+local function region_of(item)
+  local node = item
+  for _ = 1, 6 do
+    node = node:parent()
+    if node == nil then
+      return nil
+    end
+    local id = short_id(node)
+    if REGIONS[id] then
+      return id
+    end
+  end
+end
+
+local function with_region(item, text)
+  local region = region_of(item)
+  if region == nil then
+    current_region = nil
+    return text
+  end
+  if region ~= current_region then
+    current_region = region
+    local list = sf.screen.find({ id = region })
+    local count = list and list.collection and list.collection.rows
+    local legend = REGIONS[region]
+    if count and count > 0 then
+      legend = legend .. ', ' .. count .. (count == 1 and ' nápoj' or (count < 5 and ' nápoje' or ' nápojů'))
+    end
+    return legend .. '. ' .. (text or '')
+  end
+  return text
+end
+
 -- Hooky ----------------------------------------------------------------------------------------
 
 sf.onFocus(function(item, text)
   local id = short_id(item)
+  if not IN_REGION[id] then
+    current_region = nil
+  end
   if id == 'param_seekbar' then
     seek = item
     sf.setTimeout(say_seek, 0, item, text)
@@ -473,19 +522,35 @@ sf.onFocus(function(item, text)
     sf.setTimeout(function()
       local name = drink_name(item)
       local label = id == 'prefIconButton' and 'Oblíbené' or 'Příprava'
+      local said = text or label
       if present(name) and text then
-        local said = text:gsub('^' .. label, label .. ': ' .. name, 1)
-        sf.speak(said, { interrupt = true })
-      else
-        sf.speak(text or label, { interrupt = true })
+        said = text:gsub('^' .. label, label .. ': ' .. name, 1)
       end
+      sf.speak(with_region(item, said), { interrupt = true })
     end, 0)
     return false
   end
   local special = SPECIAL[id]
   if special then
     sf.setTimeout(function()
-      speak_unique(item, special(item, text) or text)
+      local said = special(item, text) or text
+      if IN_REGION[id] then
+        said = with_region(item, said)
+      end
+      speak_unique(item, said)
+    end, 0)
+    return false
+  end
+  -- Záložky Nápoje a Recepty v Oblíbených: vybraná záložka je ta, na kterou nejde klepnout.
+  if (item.className or ''):find('LinearLayout$') and present(item.contentDescription) then
+    sf.setTimeout(function()
+      local parent = item:parent()
+      local grand = parent and parent:parent()
+      if short_id(parent or item) == 'tab_layout' or (grand and short_id(grand) == 'tab_layout') then
+        sf.speak(item.contentDescription .. ', karta' .. (item.clickable and '' or ', vybráno'), { interrupt = true })
+      else
+        sf.speak(text or item.contentDescription, { interrupt = true })
+      end
     end, 0)
     return false
   end
