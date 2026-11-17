@@ -1,16 +1,25 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.1',
+  version = '0.0.2',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = "Opravy přístupnosti aplikace De'Longhi Coffee Link. Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent; hodnotu skript přečte rozpoznáním textu na obrazovce. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry, bez tažení. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají, ke kterému nápoji patří, nadpisy jsou označené a zdvojené texty skryté. Testovací verze.",
+  description = "Opravy přístupnosti aplikace De'Longhi Coffee Link. Posuvníky parametrů nápoje mají název a ohlašují skutečnou hodnotu (160 ml, Silná) místo procent; hodnotu skript přečte rozpoznáním textu na obrazovce. V nabídce Akce posuvníku je Vybrat hodnotu ze seznamu. Parametry nápoje se otevřou akcí Upravit parametry, bez tažení. Oblíbené nápoje nahoře říkají, že se poklepáním rovnou připraví, karty v seznamu otevřou detail. Průběh přípravy se ohlašuje podle nastavení. Průvodce Vytvořit říká číslo kroku a vybranou velikost, výběr profilu říká, který profil je vybraný. Tlačítka bez názvu mají popisky, srdíčka a tlačítka Příprava říkají, ke kterému nápoji patří, nadpisy jsou označené a zdvojené texty skryté. Testovací verze.",
   apps = { 'it.delonghi' },
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
     { key = 'readPercent', type = 'switch', title = 'U posuvníků hlásit i procenta', default = false },
+    {
+      key = 'brewNotify', type = 'list', title = 'Průběh přípravy nápoje', default = 'phase',
+      options = {
+        { value = 'none', label = 'Nehlásit' },
+        { value = 'sound', label = 'Jen krátký zvuk při změně fáze' },
+        { value = 'phase', label = 'Hlásit fáze (Dodání, hotovo)' },
+        { value = 'percent', label = 'Hlásit fáze a procenta po čtvrtinách' },
+      },
+    },
   },
   commands = {
     { id = 'params', title = 'Upravit parametry nápoje', menu = true },
@@ -86,6 +95,15 @@ local manifest = {
     { id = 'mood_yummy_textview', hide = true },
     { id = 'mood_relax_textview', hide = true },
     { id = 'mood_joy_textview', hide = true },
+
+    -- Vytvořit nápoj: průvodce o třech krocích. Ukazatel kroků je obrázek, krok se řekne u nadpisu.
+    { id = 'statusViewScroller', hide = 'all' },
+    { id = 'customFontTextView8', heading = true },
+    { id = 'radioSelection', hide = true },
+    { id = 'nextButton', label = 'Další krok' },
+    { id = 'backButton', label = 'Předchozí krok' },
+    { id = 'ingredientParamsList', group = true },
+    { id = 'infoIcon', hide = true },
 
     -- Detail nápoje: parametry dole jsou jedna položka, např. „Množství kávy 160.0 ml, Intenzita Jemná“.
     { id = 'beverageParamsList', group = true },
@@ -297,6 +315,134 @@ local function open_params()
   end
 end
 
+-- Položky, jejichž řeč skript skládá sám ----------------------------------------------------------
+
+local function speak_unique(item, text)
+  if present(text) then
+    sf.speak(text, { interrupt = true })
+  end
+end
+
+-- Aktivní profil aplikace ukazuje jen jako popisek spodní položky Účet.
+local function active_profile()
+  local account = sf.screen.find({ id = 'navigation_account' })
+  local name = account and trim(account.contentDescription)
+  if name == '' or name == 'Účet' then
+    return nil
+  end
+  return name
+end
+
+local STEPS = { ['Velikost'] = 1, ['Přísady'] = 2, ['Název'] = 3 }
+
+local SPECIAL = {
+  -- Výběr profilu na obrazovce Účet.
+  profile_container = function(item, text)
+    local name = text_of(item:find({ id = 'account_name_tv' }))
+    if name == '' then
+      return text
+    end
+    if name == active_profile() then
+      return name .. ', vybraný profil'
+    end
+    return name .. ', přepnout na tento profil'
+  end,
+  -- Spodní navigace: Účet má jako popisek jméno profilu.
+  navigation_account = function(item, text)
+    local name = active_profile()
+    if name then
+      return (text or ''):gsub('^' .. name:gsub('%p', '%%%0'), 'Účet, profil ' .. name, 1)
+    end
+    return text
+  end,
+  -- Oblíbené nápoje v řádku nahoře: poklepání nápoj rovnou připraví.
+  favorite_recipe_item_layout = function(item, text)
+    local name = text_of(item:find({ id = 'recipe_title_textview' }))
+    if name == '' then
+      return text
+    end
+    return name .. ', oblíbený nápoj, poklepáním se rovnou připraví'
+  end,
+  -- Karta nápoje v seznamu otevře detail s parametry.
+  cardContainer = function(item, text)
+    local name = text_of(item:find({ id = 'beverage_name_textview' }))
+    if name == '' then
+      return text
+    end
+    return name .. ', detail a parametry nápoje'
+  end,
+  -- Průvodce Vytvořit: nadpis kroku řekne i číslo kroku.
+  customFontTextView8 = function(item, text)
+    local title = text_of(item)
+    local step = STEPS[title]
+    if step then
+      return 'Krok ' .. step .. ' ze 3: ' .. title .. ', nadpis'
+    end
+    return text
+  end,
+  -- Karta velikosti s přepínačem: stav přepínače k názvu.
+  itemCard = function(item, text)
+    local radio = item:find({ id = 'radioSelection' })
+    local name = text_of(item:find({ id = 'nameSelection' }))
+    local size = text_of(item:find({ id = 'subNameSelection' }))
+    local said = name .. (size ~= '' and (', ' .. size) or '')
+    if radio and radio.checked then
+      said = said .. ', vybráno'
+    end
+    return said
+  end,
+  -- Přísady: Upravit a Odebrat u karty přísady.
+  ingredientParamEdit = function(item)
+    local parent = item:parent()
+    local name = text_of(parent and parent:find({ id = 'ingredientName' }))
+    return 'Upravit přísadu ' .. name .. ', tlačítko'
+  end,
+  ingredientParamDelete = function(item)
+    local parent = item:parent()
+    local name = text_of(parent and parent:find({ id = 'ingredientName' }))
+    return 'Odebrat přísadu ' .. name .. ', tlačítko'
+  end,
+}
+
+-- Průběh přípravy: aplikace fázi ani procenta neohlašuje.
+local last_phase, last_quarter
+
+sf.onContentChange(function(event)
+  local mode = sf.settings.get('brewNotify') or 'phase'
+  local activity = (sf.app() or {}).activity or ''
+  if mode == 'none' or not activity:find('BrewBeverages') then
+    last_phase, last_quarter = nil, nil
+    return
+  end
+  local phase = sf.screen.find({ id = 'phaseBrewBeverage' })
+  local header = sf.screen.find({ id = 'common_header_title' })
+  local header_text = text_of(header)
+  if phase == nil and header_text ~= 'Nápoj je připraven' then
+    last_phase, last_quarter = nil, nil
+    return
+  end
+  local now = phase and text_of(phase) or header_text
+  if now ~= '' and now ~= last_phase then
+    last_phase = now
+    if mode == 'sound' then
+      sf.playSound('end')
+    else
+      sf.speak(now, { interrupt = false })
+    end
+  end
+  if mode == 'percent' then
+    local progress = sf.screen.find({ id = 'progressPercentageBrewBeverage' })
+    local value = tonumber(text_of(progress):match('(%d+)'))
+    if value then
+      local quarter = value // 25
+      if last_quarter ~= nil and quarter > last_quarter and quarter < 4 then
+        sf.speak(quarter * 25 .. ' %', { interrupt = false })
+      end
+      last_quarter = quarter
+    end
+  end
+end)
+
 -- Hooky ----------------------------------------------------------------------------------------
 
 sf.onFocus(function(item, text)
@@ -317,6 +463,13 @@ sf.onFocus(function(item, text)
       else
         sf.speak(text or label, { interrupt = true })
       end
+    end, 0)
+    return false
+  end
+  local special = SPECIAL[id]
+  if special then
+    sf.setTimeout(function()
+      speak_unique(item, special(item, text) or text)
     end, 0)
     return false
   end
