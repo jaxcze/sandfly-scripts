@@ -1,7 +1,7 @@
 local manifest = {
   id = 'messenger-fix-cz',
   name = 'Messenger: zprávy jako jedna položka',
-  version = '5.5',
+  version = '5.6',
   author = 'Jan Balák (podle skriptu Tomáše Hromádky)',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -563,7 +563,8 @@ end
 
 -- Přejde na sousední zprávu; když je zpráva na kraji obrazovky, konverzaci posune.
 local function move(list, key, forward)
-  for attempt = 1, 3 do
+  local seen -- zprávy, které byly vidět před posunutím
+  for attempt = 1, 4 do
     local rows = rows_with_messages(list)
     local index
     for i, entry in ipairs(rows) do
@@ -572,10 +573,20 @@ local function move(list, key, forward)
       end
     end
     local target
-    if index == nil and key == nil then
-      target = rows[forward and 1 or #rows]
-    elseif index ~= nil then
+    if index ~= nil then
       target = rows[index + (forward and 1 or -1)]
+    elseif key == nil or seen ~= nil then
+      -- Výchozí zpráva už není vidět (posun odjel dál): nejbližší nově načtená zpráva.
+      local first, last, step = 1, #rows, 1
+      if not forward then
+        first, last, step = #rows, 1, -1
+      end
+      for i = first, last, step do
+        if seen == nil or not seen[rows[i].key] then
+          target = rows[i]
+          break
+        end
+      end
     end
     if target then
       if attempt == 1 then
@@ -587,16 +598,32 @@ local function move(list, key, forward)
       end
       return
     end
-    if attempt == 3 then
+    if attempt == 4 then
       break
+    end
+    seen = {}
+    local before = {}
+    for _, entry in ipairs(rows) do
+      seen[entry.key] = true
+      before[#before + 1] = entry.key
     end
     sf.log('Posouvám konverzaci ' .. (forward and 'k novějším' or 'ke starším'))
     list = scroll(list, forward)
     if list == nil then
       break
     end
+    -- Konec nebo začátek jen tehdy, když se po posunutí nic nezměnilo.
+    local after = {}
+    for _, entry in ipairs(rows_with_messages(list)) do
+      after[#after + 1] = entry.key
+    end
+    if table.concat(after, ';') == table.concat(before, ';') then
+      sf.speak(forward and 'Konec konverzace' or 'Začátek konverzace', { interrupt = true })
+      return
+    end
   end
-  sf.speak(forward and 'Konec konverzace' or 'Začátek konverzace', { interrupt = true })
+  sf.log('Navazující zprávu se nepodařilo najít')
+  sf.speak('Navazující zprávu se nepodařilo najít', { interrupt = true })
 end
 
 sf.onCommand('message', function(event)
