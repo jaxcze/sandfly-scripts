@@ -1,13 +1,13 @@
 local manifest = {
   id = 'ticho-asistent',
   name = 'Ticho při hlasovém asistentovi',
-  version = '0.0.1',
+  version = '0.0.2',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'Dokud je na obrazovce hlasový asistent, například Gemini spuštěný podržením vypínacího tlačítka, SandFly nečte, co asistent píše a říká. Položky, na které se sami posunete, SandFly čte dál, takže odpověď jde projít i potom. Asistent se pozná podle balíčku v nastavení skriptu (výchozí aplikace Google a Gemini); tlačítko Zjistit okna řekne, které aplikace měly okna na obrazovce naposledy.',
-  permissions = { 'screen', 'speech' },
+  description = 'Dokud je na obrazovce hlasový asistent, například Gemini spuštěný podržením vypínacího tlačítka, SandFly nečte, co asistent píše a říká. Položky, na které se sami posunete dotykem nebo švihnutím, SandFly čte dál, takže odpověď jde projít i potom; když fokus přesune asistent sám, SandFly mlčí. Asistent se pozná podle balíčku v nastavení skriptu (výchozí aplikace Google a Gemini); tlačítko Zjistit okna řekne, které aplikace měly okna na obrazovce naposledy.',
+  permissions = { 'screen', 'speech', 'events' },
   settings = {
     { key = 'packages', type = 'text', title = 'Balíčky asistenta', summary = 'Víc balíčků oddělte čárkou.', default = 'com.google.android.googlequicksearchbox, com.google.android.apps.bard' },
     { key = 'readFocus', type = 'switch', title = 'Číst položky, na které se posunu', default = true },
@@ -94,16 +94,22 @@ sf.onWindowChange(check)
 sf.onAppEnter(check)
 sf.onSettingChange(check)
 
--- Položku, na kterou se uživatel posunul, nechat přečíst.
-sf.onFocus(function()
-  if muted and sf.settings.get('readFocus') then
-    pass_until = sf.clock() + 300
+-- Položku, na kterou se uživatel posunul dotykem nebo švihnutím, nechat
+-- přečíst. Asistent přesouvá fokus na nový text i sám, tehdy dotyk neběží.
+local touching = false
+local touch_end = -10000
+
+sf.onEvent(function(e)
+  if e.type == 'touchInteractionStart' then
+    touching = true
+  elseif e.type == 'touchInteractionEnd' then
+    touching = false
+    touch_end = sf.clock()
   end
 end)
 
--- Ozvěnu psaní taky nechat, kdyby se psalo přímo asistentovi.
-sf.onTextChange(function()
-  if muted then
+sf.onFocus(function()
+  if muted and sf.settings.get('readFocus') and (touching or sf.clock() - touch_end < 800) then
     pass_until = sf.clock() + 300
   end
 end)
