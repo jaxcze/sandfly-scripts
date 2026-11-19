@@ -1,21 +1,28 @@
 local manifest = {
   id = 'ticho-asistent',
-  name = 'Ticho při hlasovém asistentovi',
-  version = '0.0.2',
+  name = 'Ticho při asistentovi Gemini',
+  version = '0.0.3',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'Dokud je na obrazovce hlasový asistent, například Gemini spuštěný podržením vypínacího tlačítka, SandFly nečte, co asistent píše a říká. Položky, na které se sami posunete dotykem nebo švihnutím, SandFly čte dál, takže odpověď jde projít i potom; když fokus přesune asistent sám, SandFly mlčí. Asistent se pozná podle balíčku v nastavení skriptu (výchozí aplikace Google a Gemini); tlačítko Zjistit okna řekne, které aplikace měly okna na obrazovce naposledy.',
+  description = 'Dokud je na obrazovce asistent Gemini, například spuštěný podržením vypínacího tlačítka, SandFly nečte, co asistent píše a říká. Položky, na které se sami posunete dotykem nebo švihnutím, SandFly čte dál, takže odpověď jde projít i potom; když fokus přesune asistent sám, SandFly mlčí. Asistent se pozná podle balíčku v nastavení skriptu (výchozí aplikace Google a Gemini; jiný asistent jde doplnit); tlačítko Zjistit okna řekne, které aplikace měly okna na obrazovce naposledy.',
   permissions = { 'screen', 'speech', 'events' },
   settings = {
     { key = 'packages', type = 'text', title = 'Balíčky asistenta', summary = 'Víc balíčků oddělte čárkou.', default = 'com.google.android.googlequicksearchbox, com.google.android.apps.bard' },
     { key = 'readFocus', type = 'switch', title = 'Číst položky, na které se posunu', default = true },
+    { key = 'debug', type = 'switch', title = 'Ladicí záznam', summary = 'Zapisuje do logu Androidu, kdy SandFly mlčí a co neřekl', default = false },
     { key = 'detect', type = 'button', title = 'Zjistit okna', summary = 'Řekne, které aplikace měly naposledy okna na obrazovce' },
   },
 }
 
 local muted = false
+
+local function debug(text)
+  if sf.settings.get('debug') then
+    sf.log.error('TICHO ' .. text)
+  end
+end
 local timer = nil
 local pass_until = 0
 
@@ -84,6 +91,9 @@ check = function()
         found = true
       end
     end
+    if found ~= muted then
+      debug(found and 'asistent na obrazovce, SandFly mlčí' or 'asistent zavřený, SandFly mluví')
+    end
     muted = found
     remember(table.concat(list, ', '))
   end
@@ -111,13 +121,19 @@ end)
 sf.onFocus(function()
   if muted and sf.settings.get('readFocus') and (touching or sf.clock() - touch_end < 800) then
     pass_until = sf.clock() + 300
+    debug('posun dotykem')
   end
 end)
 
-sf.onSpeech(function()
-  if not muted or sf.clock() < pass_until then
+sf.onSpeech(function(text)
+  if not muted then
     return
   end
+  if sf.clock() < pass_until then
+    debug('řekl: ' .. tostring(text):sub(1, 80))
+    return
+  end
+  debug('neřekl: ' .. tostring(text):sub(1, 80))
   return false
 end)
 
