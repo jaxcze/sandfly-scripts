@@ -39,7 +39,10 @@ Rozpracované skripty jsou ve složce [testovani](testovani). Hlavní zdroj je n
 github.com/jaxcze/sandfly-scripts/tree/main/testovani
 ```
 
-Teď tam žádný skript není.
+| Skript | Aplikace | Co dělá |
+|---|---|---|
+| `ticho-klavesnice.lua` | Všechny | Dokud je na obrazovce klávesnice, která mluví sama, například Corvus, SandFly mlčí. Po zavření klávesnice mluví zase normálně. Klávesnice se pozná podle části názvu balíčku v nastavení skriptu (výchozí corvus); tlačítko Zjistit klávesnici řekne balíček klávesnice, která byla naposledy na obrazovce. Notifikace při psaní jde v nastavení zapnout. |
+| `ticho-asistent.lua` | Všechny | Dokud je na obrazovce hlasový asistent, například Gemini spuštěný podržením vypínacího tlačítka, SandFly nečte, co asistent píše a říká. Položky, na které se sami posunete, a ozvěnu psaní čte dál. Asistent se pozná podle balíčku v nastavení skriptu (výchozí aplikace Google a Gemini); tlačítko Zjistit okna řekne, které aplikace měly naposledy okna na obrazovce. |
 
 ## Jak psát skripty
 
