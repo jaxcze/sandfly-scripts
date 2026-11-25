@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.7',
+  version = '0.0.11',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -11,6 +11,7 @@ local manifest = {
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
     { key = 'readPercent', type = 'switch', title = 'U posuvníků hlásit i procenta', default = false },
+    { key = 'skipSame', type = 'switch', title = 'Posuvník posouvat rovnou na další hodnotu', summary = 'Švihnutí přeskočí kroky po 5 %, které hodnotu nemění', default = true },
     {
       key = 'brewNotify', type = 'list', title = 'Průběh přípravy nápoje', default = 'phase',
       options = {
@@ -194,6 +195,8 @@ end
 
 local seek -- zaměřený posuvník parametru
 local token = 0
+local last_pct, last_val -- poslední známá poloha a hodnota zaměřeného posuvníku
+local stepping = false -- skript sám posouvá posuvník na další hodnotu
 
 local function param_name(item)
   local parent = item:parent()
@@ -207,7 +210,7 @@ end
 
 -- Hodnotu (160.0 ml, Jemná) aplikace jen kreslí pod jezdec, do přístupnosti ji nedává.
 -- Leží v ploše posuvníku, takže ji přečte rozpoznání textu.
-local function read_value(item)
+local function read_once(item)
   local fresh = item:refresh() or item
   local ok, result = pcall(fresh.recognizeText, fresh)
   if not ok or result == nil then
@@ -215,6 +218,19 @@ local function read_value(item)
   end
   local text = trim((result.text or ''):gsub('%s+', ' '))
   return present(text)
+end
+
+-- Hned po otevření panelu se ještě animuje a text pod jezdcem není vidět, proto ještě dvakrát.
+local function read_value(item)
+  for attempt = 1, 3 do
+    local text = read_once(item)
+    if text then
+      return text
+    end
+    if attempt < 3 then
+      sf.sleep(400)
+    end
+  end
 end
 
 local function percent(item)
@@ -240,7 +256,90 @@ local function announce_value(item, delay, interrupt)
     if mine ~= token then
       return
     end
+    last_pct, last_val = percent(item), value
     sf.speak(value or 'Hodnotu se nepodařilo přečíst', { interrupt = interrupt })
+  end)
+end
+
+-- Posuvník má pod sebou kroky po 1 (range), ale švihnutí ho posune o 5 % a hodnoty (Jemná,
+-- Silná, 160 ml) neleží na násobcích pěti. Skript proto nastavuje polohu přímo (setProgress)
+-- a hranici, kde se hodnota změní, najde půlením intervalu.
+local function range_of(item)
+  local fresh = item:refresh() or item
+  local r = fresh.range
+  if r and r.min and r.max and r.current then
+    return r.min, r.max, r.current
+  end
+end
+
+local function value_at(item, pos)
+  item:setProgress(pos)
+  sf.sleep(120)
+  return read_value(item)
+end
+
+-- První poloha za 'from' ve směru 'dir' (+1/-1), kde hodnota přestane být 'value'. nil = není.
+local function next_boundary(item, from, dir, value, lo_limit, hi_limit)
+  local far = dir > 0 and hi_limit or lo_limit
+  if from == far then
+    return nil
+  end
+  local far_value = value_at(item, far)
+  if far_value == nil or far_value == value then
+    return nil, far_value
+  end
+  local near, beyond = from, far
+  while math.abs(beyond - near) > 1 do
+    local mid = (near + beyond) // 2
+    if dir < 0 and (near + beyond) % 2 ~= 0 then
+      mid = mid + 1
+    end
+    local v = value_at(item, mid)
+    if v == value then
+      near = mid
+    else
+      beyond = mid
+    end
+  end
+  return beyond
+end
+
+local function step_to_next(item)
+  token = token + 1
+  local mine = token
+  sf.run(function()
+    sf.sleep(200)
+    if mine ~= token then
+      return
+    end
+    local lo, hi, now = range_of(item)
+    if not (lo and last_pct and last_val) or now == last_pct then
+      local value = read_value(item)
+      last_pct, last_val = now, value
+      sf.speak(value or 'Hodnotu se nepodařilo přečíst', { interrupt = true })
+      return
+    end
+    local dir = now > last_pct and 1 or -1
+    stepping = true
+    local ok, target = pcall(next_boundary, item, last_pct, dir, last_val, lo, hi)
+    local value
+    if ok and target then
+      value = value_at(item, target)
+    else
+      -- Na konci: zůstat na krajní hodnotě.
+      item:setProgress(last_pct)
+      sf.sleep(120)
+      value = read_value(item)
+    end
+    stepping = false
+    if mine ~= token then
+      return
+    end
+    last_pct, last_val = select(3, range_of(item)), value
+    if not (ok and target) then
+      sf.playSound('end')
+    end
+    sf.speak(value or 'Hodnotu se nepodařilo přečíst', { interrupt = true })
   end)
 end
 
@@ -254,84 +353,107 @@ local function say_seek(item, fallback)
   announce_value(item, 100, false)
 end
 
--- Seznam hodnot: posuvník se projede od začátku do konce a u každého kroku se přečte hodnota.
+-- Seznam hodnot: od začátku posuvníku se půlením najdou hranice všech hodnot.
 -- Pak se nastaví ta vybraná. Uložit musí uživatel tlačítkem Uložit.
-local function choose_value(item)
-  sf.speak('Zjišťuji hodnoty, chvíli to potrvá', { interrupt = true })
-  local start = percent(item)
-  for _ = 1, 100 do
-    local before = percent(item)
-    item:scrollBackward()
-    sf.sleep(80)
-    if percent(item) == before then
-      break
-    end
+local function choose_value_inner(item)
+  local lo, hi, start = range_of(item)
+  if not lo then
+    sf.speak('Posuvník neříká svůj rozsah', { interrupt = true })
+    return
   end
-  local values, steps = {}, {}
-  local step = 0
-  for _ = 1, 100 do
-    sf.sleep(250)
-    local value = read_value(item)
-    if value and not steps[value] then
-      steps[value] = step
+  sf.speak('Zjišťuji hodnoty, chvíli to potrvá', { interrupt = true })
+  local values, where = {}, {}
+  local pos = lo
+  local value = value_at(item, pos)
+  for _ = 1, 40 do
+    if value and not where[value] then
+      where[value] = pos
       values[#values + 1] = value
     end
-    local before = percent(item)
-    item:scrollForward()
-    sf.sleep(80)
-    if percent(item) == before then
+    local nextpos = next_boundary(item, pos, 1, value, lo, hi)
+    if nextpos == nil then
       break
     end
-    step = step + 1
+    pos = nextpos
+    value = value_at(item, pos)
   end
+  item:setProgress(start)
+  sf.sleep(120)
   if #values == 0 then
     sf.speak('Hodnoty se nepodařilo přečíst', { interrupt = true })
     return
   end
   local chosen = sf.ui.choose(param_name(item) ~= '' and param_name(item) or 'Hodnota', values)
-  local target = chosen and steps[chosen]
-  if target == nil then
-    -- Zrušeno: posuvník zpět na původní místo.
-    target = nil
-  end
-  for _ = 1, 100 do
-    local before = percent(item)
-    item:scrollBackward()
-    sf.sleep(80)
-    if percent(item) == before then
-      break
-    end
-  end
-  if target == nil then
-    for _ = 1, 100 do
-      if start == nil or (percent(item) or 0) >= start then
-        break
-      end
-      local before = percent(item)
-      item:scrollForward()
-      sf.sleep(80)
-      if percent(item) == before then
-        break
-      end
-    end
-    item:focus()
-    return
-  end
-  for _ = 1, target do
-    item:scrollForward()
-    sf.sleep(80)
+  local target = chosen and where[chosen]
+  if target then
+    item:setProgress(target)
   end
   item:focus()
   sf.sleep(250)
-  sf.speak((read_value(item) or chosen) .. '. Nezapomeňte uložit.', { interrupt = true })
+  if target then
+    sf.speak((read_value(item) or chosen) .. '. Nezapomeňte uložit.', { interrupt = true })
+  end
+end
+
+-- Během výběru ze seznamu posouvá posuvník skript sám, krokování na další hodnotu by se pletlo.
+local function choose_value(item)
+  stepping = true
+  local ok, err = pcall(choose_value_inner, item)
+  stepping = false
+  last_pct, last_val = select(3, range_of(item)), read_value(item)
+  if not ok then
+    error(err)
+  end
+end
+
+-- Detail nápoje má dva stavy spodního panelu a oba jsou ve stromu pořád: rozbalené parametry
+-- (posuvníky, Uložit) i sbalený proužek a pod ním detail s tlačítkem Příprava. Švihání by
+-- chodilo i po neviditelné části, proto skript schová tu, která zrovna není vidět.
+local BEHIND_SHEET = { 'common_header_title', 'close_btn', 'beverageImage', 'prefIconButton', 'beverageName',
+  'beverageDescription', 'tipsIcon', 'beverage_hint', 'button_brew_1', 'beverageParamsList', 'downArrow' }
+local sheet_rules = {}
+local sheet_state = nil
+
+local function set_sheet_rules(state)
+  if state == sheet_state then
+    return
+  end
+  sheet_state = state
+  for _, n in ipairs(sheet_rules) do
+    sf.rules.remove(n)
+  end
+  sheet_rules = {}
+  if state == 'expanded' then
+    for _, id in ipairs(BEHIND_SHEET) do
+      sheet_rules[#sheet_rules + 1] = sf.rules.add({ id = id, hide = 'all' })
+    end
+  elseif state == 'collapsed' then
+    sheet_rules[#sheet_rules + 1] = sf.rules.add({ id = 'beverageParamsEditContainer', hide = 'all' })
+  end
+end
+
+local function update_sheet()
+  local sheet = sf.screen.find({ id = 'bottomSheet' })
+  if sheet == nil or sheet.bounds == nil then
+    set_sheet_rules(nil)
+    return nil
+  end
+  local state = (sheet.bounds.bottom - sheet.bounds.top) > 600 and 'expanded' or 'collapsed'
+  set_sheet_rules(state)
+  return state
 end
 
 -- Otevření parametrů nápoje: aplikace to umí jen tažením spodního panelu nahoru.
 local function open_params()
   local peek = sf.screen.find({ id = 'beverageParamsList' })
-  if sf.screen.find({ id = 'param_seekbar' }) then
-    local first = sf.screen.find({ id = 'param_seekbar' })
-    first:focus()
+  -- Posuvníky jsou ve stromu i ve sbaleném panelu, jen schované pod okrajem obrazovky.
+  -- Rovnou na ně jít jen tehdy, když je panel rozbalený.
+  local sheet = sf.screen.find({ id = 'bottomSheet' })
+  -- Sbalený panel je jen proužek dole (asi 240 px), rozbalený zabírá většinu obrazovky.
+  local expanded = sheet and sheet.bounds and (sheet.bounds.bottom - sheet.bounds.top) > 600
+  local existing = sf.screen.find({ id = 'param_seekbar' })
+  if existing and (expanded or sheet == nil) then
+    existing:focus()
     return
   end
   if peek == nil or peek.bounds == nil then
@@ -342,8 +464,21 @@ local function open_params()
   local x = (b.left + b.right) // 2
   local y = b.top + 20
   sf.touch.swipe(x, y, x, 300, 500)
-  local first = sf.screen.waitFor({ id = 'param_seekbar' }, 3000)
+  -- Počkat, až se panel rozbalí a ustálí; posuvníky jsou ve stromu už předtím.
+  local opened = false
+  for _ = 1, 15 do
+    sf.sleep(200)
+    local now = sf.screen.find({ id = 'bottomSheet' })
+    if now and now.bounds and (now.bounds.bottom - now.bounds.top) > 600 then
+      opened = true
+      break
+    end
+  end
+  local first = opened and sf.screen.find({ id = 'param_seekbar' })
+  update_sheet()
   if first then
+    sf.sleep(400)
+    first = sf.screen.find({ id = 'param_seekbar' }) or first
     first:focus()
   else
     sf.speak('Parametry se nepodařilo otevřít', { interrupt = true })
@@ -662,6 +797,16 @@ end)
 sf.onSpeech(function(text)
   if seek ~= nil and text ~= nil and #text < 30
     and (text:find('^%s*%d+%s*%%') or text:find('^%s*%d+%s*procent')) then
+    if stepping then
+      return false
+    end
+    if sf.settings.get('skipSame') ~= false then
+      step_to_next(seek)
+      if sf.settings.get('readPercent') then
+        return
+      end
+      return false
+    end
     if sf.settings.get('readPercent') then
       announce_value(seek, 250, false)
       return
@@ -682,11 +827,23 @@ sf.onActions(function(item)
   if id:find('^rb_[%d_]+$') then
     return { { title = 'Vybrat úroveň mletí ze seznamu', first = true, run = choose_grind } }
   end
-  if id == 'beverageParamsList' or id == 'beverageName' or id == 'button_brew_1' then
+  -- Akce i na položkách sbaleného panelu parametrů (Množství kávy, Intenzita), kam fokus jde nejčastěji.
+  if id == 'beverageParamsList' or id == 'beverageName' or id == 'button_brew_1' or id == 'beverageDescription'
+      or id == 'beverage_hint' or id == 'downArrow' or id:find('^beverage_detail_item') then
     return { { title = 'Upravit parametry', first = true, run = open_params } }
   end
 end)
 
 sf.onCommand('params', function()
   open_params()
+end)
+
+-- Stav spodního panelu na detailu nápoje (viz set_sheet_rules).
+sf.onContentChange(function()
+  local activity = (sf.app() or {}).activity or ''
+  if activity:find('BrewBeverages') then
+    update_sheet()
+  elseif sheet_state ~= nil then
+    set_sheet_rules(nil)
+  end
 end)

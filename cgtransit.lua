@@ -1,12 +1,12 @@
 local manifest = {
   id = 'cgtransit',
   name = 'CG Transit: spojení a seznamy tras',
-  version = '0.0.1',
+  version = '0.0.8',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
   testedApiVersion = 5,
-  description = 'Detail spojení: každý úsek cesty se přečte jako věta (spoj, odjezd, mezizastávky, příjezd, směr) bez znaků z ikonového písma; tarifní pásma a dopravce jde zapnout v nastavení. Hlavní obrazovka: Odkud a Kam místo „null:“, záložky Rychlá volba, Historie a Oblíbené říkají, která je vybraná, a seznam tras se při vstupu ohlásí jménem záložky. Trasa je jedna položka; Přidat do oblíbených, Odebrat z oblíbených a Upravit jsou v nabídce Akce.',
+  description = 'Detail spojení: každý úsek cesty se přečte jako věta (spoj, odjezd, mezizastávky, příjezd, směr) bez znaků z ikonového písma; mezizastávky se rozbalí poklepáním na úsek; tarifní pásma a dopravce jde zapnout v nastavení. Výpis spojení: každé spojení je jedna položka se spoji a časy, bez „mezerník“ a bez ohlašování odpočtu. Mapa je skrytá. Hlavní obrazovka: Odkud, Přes a Kam místo „null:“, tlačítko Vyhledat spojení má název, záložky Rychlá volba, Historie a Oblíbené říkají, která je vybraná, a seznam tras se při vstupu ohlásí jménem záložky. Trasa je jedna položka; Přidat do oblíbených, Odebrat z oblíbených a Upravit jsou v nabídce Akce.',
   apps = { 'com.circlegate.tt.transit.android' },
   permissions = { 'screen', 'speech', 'input', 'actions' },
   settings = {
@@ -16,10 +16,25 @@ local manifest = {
   },
   rules = {
     { id = 'btn_find_journeys', label = 'Vyhledat spojení' },
-    { id = 'icon_expand', label = 'Rozbalit mezizastávky' },
+    -- Rozbalení mezizastávek: poklepání na úsek; samostatné tlačítko jen překáží.
+    { id = 'icon_expand', hide = true },
     -- Hvězdička a Upravit u trasy v seznamu: v nabídce Akce trasy.
     { id = 'btn_star', hide = true },
     { id = 'btn_fill', hide = true },
+    -- Spojení ve výsledcích hledání je jedna položka s popisem od aplikace. Texty uvnitř mají
+    -- popis jen z pevné mezery, SandFly by je četl jako „mezerník“.
+    { match = { inside = { id = 'fj_result_journey' } }, hide = true },
+    -- Prázdné záhlaví nad úseky v detailu spojení.
+    { id = 'dummy_header', hide = true },
+    -- Mapa pod detailem spojení a hlavní obrazovkou: Mapa Google, zastávky na ní, Moje poloha.
+    -- Mapa kreslí své položky (zastávky) sama, pravidlo na obal na ně nedosáhne, proto i zvlášť.
+    { id = 'map_wrapper_layout', hide = 'all' },
+    { id = 'map_touch_delegate_view', hide = true },
+    { match = { inside = { id = 'map_view' } }, hide = true },
+    { match = { contentDescription = 'Mapa Google' }, hide = true },
+    { match = { contentDescription = 'Moje poloha' }, hide = true },
+    -- „před 15 s“ v záhlaví spojení se mění každou vteřinu; neohlašovat.
+    { id = 'fj_result_journey', silence = 'all' },
   },
 }
 
@@ -29,6 +44,19 @@ local ICONS = {
   ['\u{F048}'] = 'bezbariérový',
   ['\u{F05A}'] = 'ikona telefonu',
   ['\u{F044}'] = 'na znamení',
+}
+-- Dny v poznámkách („jede v ⑥,⑦“): kroužkované číslice 1 až 7 jsou dny od pondělí do neděle,
+-- kladívka pracovní dny, křížek neděle a svátky. Vkládají se bez čárky před sebou.
+local DAYS = {
+  ['\u{F031}'] = 'pondělí',
+  ['\u{F032}'] = 'úterý',
+  ['\u{F033}'] = 'středu',
+  ['\u{F034}'] = 'čtvrtek',
+  ['\u{F035}'] = 'pátek',
+  ['\u{F036}'] = 'sobotu',
+  ['\u{F037}'] = 'neděli',
+  ['\u{F058}'] = 'pracovní dny',
+  ['\u{F02B}'] = 'neděli a ve svátky',
 }
 local TABS = { ['RYCHLÁ VOLBA'] = 'Rychlá volba', ['HISTORIE'] = 'Historie', ['OBLÍBENÉ'] = 'Oblíbené' }
 local TAB_ORDER = { 'RYCHLÁ VOLBA', 'HISTORIE', 'OBLÍBENÉ' }
@@ -57,7 +85,9 @@ local function words(text)
   local plain = (text or ''):gsub(NBSP, ' ')
   for _, code in utf8.codes(plain) do
     local char = utf8.char(code)
-    if ICONS[char] then
+    if DAYS[char] then
+      out[#out + 1] = ' ' .. DAYS[char] .. ' '
+    elseif ICONS[char] then
       out[#out + 1] = ', ' .. ICONS[char] .. ' '
     elseif code >= 0xE000 and code <= 0xF8FF then
       -- Jiná ikona, kterou neznáme: vynechat.
@@ -67,6 +97,24 @@ local function words(text)
   end
   local result = table.concat(out):gsub('%s+', ' '):gsub('%s+,', ','):gsub(',%s*,', ',')
   return trim(result:gsub('^,%s*', ''):gsub(',%s*$', ''))
+end
+
+-- Písmena u zastávek („z“) vysvětluje aplikace v poznámkách pod spojením, např. „z – zastávka
+-- na znamení v sobotu a v neděli“. Vysvětlivky se sbírají z obrazovky při čtení úseku.
+local LETTERS = {}
+
+local function collect_letters()
+  LETTERS = {}
+  for _, item in ipairs(sf.screen.findAll({ id = 'text' }, 60) or {}) do
+    local line = trim(item.text)
+    local letter, meaning = line:match('^(%a)%s*[%-–:=]%s*(.+)$')
+    if letter == nil then
+      letter, meaning = line:match('^(%a)%s+(.+)$')
+    end
+    if letter and #meaning > 3 then
+      LETTERS[letter] = meaning
+    end
+  end
 end
 
 -- Poznámky u zastávky: trojmístné číslo je tarifní pásmo, krátké číslo nástupiště nebo stanoviště.
@@ -86,6 +134,8 @@ local function notes(text)
     for piece in segment:gmatch('%S+') do
       if piece:find('^%d+$') then
         parts[#parts + 1] = 'nástupiště ' .. piece
+      elseif piece:find('^%a$') and LETTERS[piece] then
+        parts[#parts + 1] = LETTERS[piece]
       else
         phrase[#phrase + 1] = piece
       end
@@ -117,6 +167,7 @@ local function child_text(node, id)
 end
 
 local function describe_leg(leg)
+  collect_letters()
   local parts = {}
   local left = child_text(leg, 'header_text_left')
   local right_node = leg:find({ id = 'header_text_right' })
@@ -156,6 +207,15 @@ local function describe_leg(leg)
     parts[#parts + 1] = agency
   end
   return table.concat(parts, '. ')
+end
+
+-- Úsek v detailu spojení: má odjezdovou i příjezdovou zastávku.
+local function is_leg(item)
+  -- Spojení ve výsledcích hledání má uvnitř stejné prvky, ale aplikace mu dává vlastní popis.
+  if short_id(item) == 'fj_result_journey' then
+    return false
+  end
+  return item:find({ id = 'stop_name_dep' }) ~= nil and item:find({ id = 'stop_name_arr' }) ~= nil
 end
 
 -- Hlavní obrazovka ------------------------------------------------------------------------------
@@ -201,14 +261,20 @@ local function describe_route(row)
 end
 
 local function place_label(item, text)
-  -- První pole s místem je Odkud, druhé Kam.
+  -- První pole s místem je Odkud, poslední Kam, mezi nimi Přes.
   local index = 1
-  for i, place in ipairs(sf.screen.findAll({ textContains = 'null: ' }, 5) or {}) do
+  local places = sf.screen.findAll({ textContains = 'null: ' }, 6) or {}
+  for i, place in ipairs(places) do
     if place == item then
       index = i
     end
   end
-  local label = index == 1 and 'Odkud' or 'Kam'
+  local label = 'Přes'
+  if index == 1 then
+    label = 'Odkud'
+  elseif index == #places then
+    label = 'Kam'
+  end
   return label .. ': ' .. trim((item.text or ''):gsub('^null: ', '')) .. ', tlačítko'
 end
 
@@ -216,6 +282,10 @@ end
 
 sf.onFocus(function(item, text)
   local class = short_class(item)
+  -- Plovoucí tlačítko hledání nemá popis a pravidlo s label se na něj nechytá.
+  if short_id(item) == 'btn_find_journeys' then
+    return 'Vyhledat spojení, tlačítko'
+  end
   if (item.text or ''):find('^null: ') then
     current_list = nil
     sf.setTimeout(function()
@@ -234,23 +304,57 @@ sf.onFocus(function(item, text)
     end
     return TABS[key] .. ', karta ' .. position .. ' ze ' .. #TAB_ORDER .. (item.selected and ', vybráno' or '')
   end
-  if class == 'LinearLayout' and item.clickable then
+  -- Spojení ve výsledcích, kterému aplikace ještě nedala popis: složit ho z textů uvnitř,
+  -- jinak SandFly čte jen popisy z pevných mezer („Mezerník, Mezerník“).
+  if short_id(item) == 'fj_result_journey' and not present(trim(item.contentDescription or '')) then
     sf.setTimeout(function()
-      local said
-      if item:find({ id = 'trip_name' }) or item:find({ id = 'stop_name_dep' }) then
-        current_list = nil
-        said = describe_leg(item)
-      elseif route_row(item) then
-        said = describe_route(item)
-      else
-        current_list = nil
-        said = text
+      -- Aplikace popis často doplní za chvíli.
+      for _ = 1, 4 do
+        sf.sleep(150)
+        local fresh = item:refresh()
+        if fresh and present(trim(fresh.contentDescription or '')) then
+          sf.speak(fresh.contentDescription, { interrupt = true })
+          return
+        end
       end
-      sf.speak(said or text, { interrupt = true })
+      local parts = {}
+      for _, child in ipairs(item:findAll({}, 80) or {}) do
+        local t = words(child.text)
+        if present(t) then
+          parts[#parts + 1] = t
+        end
+      end
+      sf.speak(present(table.concat(parts, ', ')) or text, { interrupt = true })
     end, 0)
     return false
   end
+  -- Jen úsek v detailu spojení a trasa v seznamu; ostatní řádky (Bez přestupů, Čas, Další
+  -- parametry, spojení ve výsledcích hledání) čte SandFly sám.
+  if class == 'LinearLayout' and item.clickable then
+    if is_leg(item) then
+      current_list = nil
+      sf.setTimeout(function()
+        sf.speak(describe_leg(item) or text, { interrupt = true })
+      end, 0)
+      return false
+    end
+    if route_row(item) then
+      sf.setTimeout(function()
+        sf.speak(describe_route(item) or text, { interrupt = true })
+      end, 0)
+      return false
+    end
+  end
   current_list = nil
+  -- Jiný text se znaky ikonového písma, např. „jede v ⑥,⑦“ v detailu spoje nebo poznámky
+  -- u zastávky: ikony a dny slovy.
+  if text then
+    for _, code in utf8.codes(text) do
+      if code >= 0xE000 and code <= 0xF8FF then
+        return words(text)
+      end
+    end
+  end
 end)
 
 sf.onActions(function(item)
