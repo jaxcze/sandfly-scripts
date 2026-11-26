@@ -6,7 +6,7 @@ Skripty v jazyce Lua pro odečítač obrazovky [SandFly](https://github.com/aaro
 
 ## Instalace
 
-V nastavení SandFly otevřete **Aplikace** > **Skripty** > **Zdroje skriptů** > **Přidat zdroj** a zadejte:
+V nastavení SandFly otevřete **Skripty** > **Zdroje skriptů** > **Přidat zdroj** a zadejte:
 
 ```
 github.com/jaxcze/sandfly-scripts
@@ -14,7 +14,7 @@ github.com/jaxcze/sandfly-scripts
 
 Pak vyberte skript ze seznamu. SandFly bude jednou denně kontrolovat novější verze.
 
-Jednotlivý skript jde nainstalovat i bez přidání zdroje: stáhněte soubor `.lua` a v SandFly zvolte **Aplikace** > **Skripty** > **Importovat skript**, nebo soubor sdílejte do **Install SandFly script**.
+Jednotlivý skript jde nainstalovat i bez přidání zdroje: stáhněte soubor `.lua` a v nastavení SandFly zvolte **Skripty** > **Importovat skript**, nebo soubor sdílejte do **Install SandFly script**.
 
 Skripty nejsou podepsané od SandFly, instalace proto ukáže „Not signed by SandFly“.
 
