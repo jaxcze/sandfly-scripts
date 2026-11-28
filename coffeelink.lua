@@ -1,7 +1,7 @@
 local manifest = {
   id = 'coffeelink',
   name = "De'Longhi Coffee Link: přístupnost",
-  version = '0.0.11',
+  version = '0.0.12',
   author = 'Jan Balák',
   homepage = 'https://github.com/jaxcze/sandfly-scripts',
   minApiVersion = 2,
@@ -11,7 +11,7 @@ local manifest = {
   permissions = { 'screen', 'speech', 'input', 'actions', 'dialogs' },
   settings = {
     { key = 'readPercent', type = 'switch', title = 'U posuvníků hlásit i procenta', default = false },
-    { key = 'skipSame', type = 'switch', title = 'Posuvník posouvat rovnou na další hodnotu', summary = 'Švihnutí přeskočí kroky po 5 %, které hodnotu nemění', default = true },
+    { key = 'skipSame', type = 'switch', title = 'Posuvník posouvat rovnou na další hodnotu', summary = 'Švihnutí přeskočí kroky, které hodnotu nemění, při kroku posuvníku podle aplikace (5 %) i 1 %', default = true },
     {
       key = 'brewNotify', type = 'list', title = 'Průběh přípravy nápoje', default = 'phase',
       options = {
@@ -320,8 +320,24 @@ local function step_to_next(item)
       return
     end
     local dir = now > last_pct and 1 or -1
+    -- S krokem posuvníku 1 % v SandFly (Navigace > Posuvníky) se posuvník posune jen o jednu
+    -- polohu. Když už ta změnila hodnotu, nic dalšího není potřeba; když ne, hledá se dál od ní.
+    -- Při kroku 5 % se hledá od původní polohy, aby se nepřeskočila hodnota uprostřed kroku.
+    local from = last_pct
+    if math.abs(now - last_pct) <= 1 then
+      local here = read_value(item)
+      if mine ~= token then
+        return
+      end
+      if here and here ~= last_val then
+        last_pct, last_val = now, here
+        sf.speak(here, { interrupt = true })
+        return
+      end
+      from = now
+    end
     stepping = true
-    local ok, target = pcall(next_boundary, item, last_pct, dir, last_val, lo, hi)
+    local ok, target = pcall(next_boundary, item, from, dir, last_val, lo, hi)
     local value
     if ok and target then
       value = value_at(item, target)
